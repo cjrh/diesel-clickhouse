@@ -133,7 +133,11 @@ pub use json::{
 };
 pub use operators::{GlobalIn, GlobalInDsl, NotGlobalIn, NotGlobalInDsl};
 pub use ordering::{FillBound, NoFillBound, WithFill, with_fill};
-pub use vectors::{VectorLiteral, vector_f32, vector_f64};
+pub use vectors::{
+    VectorBytes, VectorBytesEncoding, VectorLiteral, vector_f32, vector_f32_binary, vector_f32_hex,
+    vector_f32_le_bytes, vector_f32_le_hex, vector_f64, vector_f64_binary, vector_f64_hex,
+    vector_f64_le_bytes, vector_f64_le_hex,
+};
 pub use window::{
     NoWindowBindings, NoWindowFrame, NoWindowOrder, NoWindowPartition, Over, OverDsl, OverWindow,
     QualifyQuery, RowsBetweenUnboundedPrecedingAndCurrentRow, WindowBinding, WindowFrame,

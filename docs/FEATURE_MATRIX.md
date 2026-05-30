@@ -123,7 +123,7 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
 | ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536).distance(VectorDistanceFunction::CosineDistance))` | Render-tested; live fixture keeps exact search portable across server builds. |
 | ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
-| ⬜ | Binary reference-vector parameter helpers | planned `reinterpret(binary, Array(Float32))` helper | Useful for large 1536/3072-dimension embeddings. |
+| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))`, `vector_f32_hex(sql("?"))`, `vector_f32_le_hex([...])` | Render-tested. ClickHouse docs recommend true binary client parameters; the HTTP test client string-binds placeholders, so live coverage stays on exact vector literals. |
 
 ## Aggregate functions and combinators
 
