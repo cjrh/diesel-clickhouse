@@ -163,7 +163,7 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Column codecs/default/materialized/alias | `Column::new(...).default_expr(...)`, `.materialized_expr(...)`, `.alias_expr(...)`, `.codec(...)` |
 | ✅ 🧪 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)`, `TableIndex::custom(...)`, `projection("by_tenant", "SELECT ...")`, `alter_table(...).add_projection(...)` |
 | ✅ 🧪 | Materialized views | `create_materialized_view("events_mv").to("target").as_select(query)` |
-| 🚧 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`, `.rename_column(...)`, `.add_index(...)`, `.materialize_index(...)`, `.add_projection(...)`, `.materialize_projection(...)` | Column/index/projection lifecycle and `MODIFY TTL` implemented; mutations and partitions planned. |
+| ✅ 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`, `.rename_column(...)`, `.add_index(...)`, `.materialize_index(...)`, `.add_projection(...)`, `.materialize_projection(...)`, `.update(...)`, `.delete_where(...)`, `.drop_partition(...)`, `.detach_partition(...)`, `.attach_partition(...)`, `.freeze_partition_with_name(...)` | Column/index/projection lifecycle, `MODIFY TTL`, mutations, and common partition operations implemented. Advanced replicated-only partition moves/fetches can be added by demand. |
 
 ## Test policy
 

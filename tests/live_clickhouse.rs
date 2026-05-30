@@ -29,15 +29,16 @@ use diesel_clickhouse::{
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
     is_null, is_valid_json, json_extract_int, json_extract_int_path, json_extract_string_path,
     json_has, json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length,
-    lower, map_apply, map_contains, map_filter, max_if, merge_tree, min_if, partition_by, position,
-    prewhere, projection, quantile, quantile_deterministic, quantile_exact, quantile_timing,
-    quantiles, quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup,
-    round, row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
-    simple_json_has, sip_hash64, substring, sum_merge, sum_state, summing_merge_tree, to_date_time,
-    to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql,
-    to_string, to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex,
-    uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol,
-    url_query_string, vector_f32, with_fill, xx_hash64,
+    lower, map_apply, map_contains, map_filter, max_if, merge_tree, min_if, mutation_assignment,
+    partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
+    simple_json_extract_string, simple_json_has, sip_hash64, substring, sum_merge, sum_state,
+    summing_merge_tree, to_date_time, to_float64, to_float64_or_null, to_int32, to_int32_or_null,
+    to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null, top_k,
+    top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32, with_fill,
+    xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -148,6 +149,8 @@ async fn setup(client: &clickhouse::Client) -> TestResult<()> {
         "DROP TABLE IF EXISTS diesel_clickhouse_type_showcase",
         "DROP TABLE IF EXISTS diesel_clickhouse_projection_rollups",
         "DROP TABLE IF EXISTS diesel_clickhouse_summing_rollups",
+        "DROP TABLE IF EXISTS diesel_clickhouse_mutations",
+        "DROP TABLE IF EXISTS diesel_clickhouse_partitions",
         "CREATE TABLE diesel_clickhouse_events (
             id UInt64,
             tenant_id String,
@@ -309,6 +312,132 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .fetch_one()
         .await?;
     assert_eq!(summing_exists, 1);
+
+    let mutations_ddl = create_table("diesel_clickhouse_mutations")
+        .column("id", DataType::UInt64)
+        .column("day", DataType::Date)
+        .column("value", DataType::UInt64)
+        .column("label", DataType::String)
+        .engine(
+            merge_tree()
+                .partition_by(["day"])
+                .order_by(["id"])
+                .setting("index_granularity", 128_i64),
+        );
+    fixture
+        .client
+        .query(&to_sql(&mutations_ddl)?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(
+            "INSERT INTO diesel_clickhouse_mutations VALUES \
+            (1, '2024-01-01', 1, 'old'), \
+            (2, '2024-01-01', 2, 'delete-me'), \
+            (3, '2024-01-02', 3, 'keep')",
+        )
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_mutations")
+                .update(
+                    [
+                        mutation_assignment("value", "value + 10"),
+                        mutation_assignment("label", "'updated'"),
+                    ],
+                    "id = 1",
+                )
+                .setting("mutations_sync", 2_i64),
+        )?)
+        .execute()
+        .await?;
+    let updated_row: (u64, String) = fixture
+        .client
+        .query("SELECT value, label FROM diesel_clickhouse_mutations WHERE id = 1")
+        .fetch_one()
+        .await?;
+    assert_eq!(updated_row, (11, "updated".to_string()));
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_mutations")
+                .delete_in_partition(partition_expr("'2024-01-01'"), "id = 2")
+                .setting("mutations_sync", 2_i64),
+        )?)
+        .execute()
+        .await?;
+    let mutation_count: u64 = fixture
+        .client
+        .query("SELECT count() FROM diesel_clickhouse_mutations")
+        .fetch_one()
+        .await?;
+    assert_eq!(mutation_count, 2);
+
+    let partitions_ddl = create_table("diesel_clickhouse_partitions")
+        .column("id", DataType::UInt64)
+        .column("day", DataType::Date)
+        .column("value", DataType::String)
+        .engine(merge_tree().partition_by(["day"]).order_by(["id"]));
+    fixture
+        .client
+        .query(&to_sql(&partitions_ddl)?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(
+            "INSERT INTO diesel_clickhouse_partitions VALUES \
+            (1, '2024-01-01', 'a'), \
+            (2, '2024-01-01', 'b'), \
+            (3, '2024-01-02', 'c')",
+        )
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_partitions")
+                .detach_partition(partition_expr("'2024-01-01'")),
+        )?)
+        .execute()
+        .await?;
+    let detached_count: u64 = fixture
+        .client
+        .query("SELECT count() FROM diesel_clickhouse_partitions")
+        .fetch_one()
+        .await?;
+    assert_eq!(detached_count, 1);
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_partitions")
+                .attach_partition(partition_expr("'2024-01-01'")),
+        )?)
+        .execute()
+        .await?;
+    let attached_count: u64 = fixture
+        .client
+        .query("SELECT count() FROM diesel_clickhouse_partitions")
+        .fetch_one()
+        .await?;
+    assert_eq!(attached_count, 3);
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_partitions")
+                .drop_partition(partition_expr("'2024-01-02'")),
+        )?)
+        .execute()
+        .await?;
+    let partition_count_after_drop: u64 = fixture
+        .client
+        .query("SELECT count() FROM diesel_clickhouse_partitions")
+        .fetch_one()
+        .await?;
+    assert_eq!(partition_count_after_drop, 2);
 
     let aggregate_states_ddl = create_table("diesel_clickhouse_aggregate_states")
         .column("state_key", DataType::UInt64)
@@ -1266,6 +1395,16 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     fixture
         .client
         .query("DROP TABLE diesel_clickhouse_summing_rollups")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_mutations")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_partitions")
         .execute()
         .await?;
     fixture

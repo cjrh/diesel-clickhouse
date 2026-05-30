@@ -17,19 +17,19 @@ use diesel_clickhouse::{
     json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
     json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
     length, linf_distance, linf_norm, lower, map_apply, map_contains, map_filter, map_from_arrays,
-    map_keys, map_values, max_merge, max_state, min_merge, min_state, partition_by, position,
-    prewhere, projection, quantile, quantile_deterministic, quantile_exact, quantile_timing,
-    quantiles, quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup,
-    round, row_number, sample, sample_offset, simple_json_extract_int, simple_json_extract_string,
-    simple_json_has, sip_hash64, substring, sum_merge, sum_merge_state, sum_state,
-    summing_merge_tree_with, to_bool, to_date_time, to_float32, to_float64, to_float64_or_null,
-    to_int32, to_int32_or_null, to_int64, to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql,
-    to_start_of_hour, to_string, to_uint32, to_uint64, to_uint64_or_null, to_uint64_or_zero,
-    to_uint128, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_merge,
-    uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full,
-    url_protocol, url_query_string, vector_f32, vector_f32_binary, vector_f32_hex,
-    vector_f32_le_hex, vector_f64, vector_f64_hex, vector_similarity_index,
-    versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
+    map_keys, map_values, max_merge, max_state, min_merge, min_state, mutation_assignment,
+    partition_by, partition_expr, partition_id, position, prewhere, projection, quantile,
+    quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing, rank,
+    regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
+    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
+    sip_hash64, substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool,
+    to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
+    to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_start_of_hour, to_string, to_uint32,
+    to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, top_k, top_level_domain,
+    try_base64_decode, unhex, uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32,
+    vector_f32_binary, vector_f32_hex, vector_f32_le_hex, vector_f64, vector_f64_hex,
+    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -974,6 +974,89 @@ fn renders_alter_table_helpers() {
     assert_eq!(
         to_sql(&ttl).unwrap(),
         "ALTER TABLE `analytics`.`events` MODIFY TTL created_at + INTERVAL 30 DAY"
+    );
+}
+
+#[test]
+fn renders_alter_table_mutation_and_partition_helpers() {
+    let update = alter_table("analytics.events")
+        .update_in_partition(
+            [
+                mutation_assignment("page", "'landing'"),
+                mutation_assignment("latency_ms", "latency_ms + 1"),
+            ],
+            partition_expr("'2024-01-01'"),
+            "tenant_id = 'acme'",
+        )
+        .setting("mutations_sync", 2_i64);
+    let delete = alter_table("analytics.events")
+        .delete_in_partition(partition_id("202401"), "success = 0")
+        .setting("mutations_sync", 2_i64);
+    let drop_partition = alter_table("analytics.events").drop_partition(partition_id("202401"));
+    let detach_partition =
+        alter_table("analytics.events").detach_partition(partition_expr("tuple(2024, 1)"));
+    let attach_partition = alter_table("analytics.events").attach_partition(partition_expr("ALL"));
+    let drop_detached =
+        alter_table("analytics.events").drop_detached_partition(partition_id("old"));
+    let freeze = alter_table("analytics.events")
+        .freeze_partition_with_name(partition_expr("'2024-01-01'"), "backup_2024_01_01");
+    let freeze_all = alter_table("analytics.events").freeze_with_name("backup_all");
+    let clear_column =
+        alter_table("analytics.events").clear_column_in_partition("page", partition_id("202401"));
+    let clear_index = alter_table("analytics.events")
+        .clear_index_in_partition("id_minmax", partition_expr("'2024-01-01'"));
+    let replace_partition = alter_table("analytics.events")
+        .replace_partition_from(partition_expr("'2024-01-01'"), "analytics.events_staging");
+    let move_partition = alter_table("analytics.events")
+        .move_partition_to_table(partition_expr("'2024-01-01'"), "analytics.events_archive");
+
+    assert_eq!(
+        to_sql(&update).unwrap(),
+        "ALTER TABLE `analytics`.`events` UPDATE `page` = 'landing', `latency_ms` = latency_ms + 1 IN PARTITION '2024-01-01' WHERE tenant_id = 'acme' SETTINGS mutations_sync = 2"
+    );
+    assert_eq!(
+        to_sql(&delete).unwrap(),
+        "ALTER TABLE `analytics`.`events` DELETE IN PARTITION ID '202401' WHERE success = 0 SETTINGS mutations_sync = 2"
+    );
+    assert_eq!(
+        to_sql(&drop_partition).unwrap(),
+        "ALTER TABLE `analytics`.`events` DROP PARTITION ID '202401'"
+    );
+    assert_eq!(
+        to_sql(&detach_partition).unwrap(),
+        "ALTER TABLE `analytics`.`events` DETACH PARTITION tuple(2024, 1)"
+    );
+    assert_eq!(
+        to_sql(&attach_partition).unwrap(),
+        "ALTER TABLE `analytics`.`events` ATTACH PARTITION ALL"
+    );
+    assert_eq!(
+        to_sql(&drop_detached).unwrap(),
+        "ALTER TABLE `analytics`.`events` DROP DETACHED PARTITION ID 'old'"
+    );
+    assert_eq!(
+        to_sql(&freeze).unwrap(),
+        "ALTER TABLE `analytics`.`events` FREEZE PARTITION '2024-01-01' WITH NAME 'backup_2024_01_01'"
+    );
+    assert_eq!(
+        to_sql(&freeze_all).unwrap(),
+        "ALTER TABLE `analytics`.`events` FREEZE WITH NAME 'backup_all'"
+    );
+    assert_eq!(
+        to_sql(&clear_column).unwrap(),
+        "ALTER TABLE `analytics`.`events` CLEAR COLUMN `page` IN PARTITION ID '202401'"
+    );
+    assert_eq!(
+        to_sql(&clear_index).unwrap(),
+        "ALTER TABLE `analytics`.`events` CLEAR INDEX `id_minmax` IN PARTITION '2024-01-01'"
+    );
+    assert_eq!(
+        to_sql(&replace_partition).unwrap(),
+        "ALTER TABLE `analytics`.`events` REPLACE PARTITION '2024-01-01' FROM `analytics`.`events_staging`"
+    );
+    assert_eq!(
+        to_sql(&move_partition).unwrap(),
+        "ALTER TABLE `analytics`.`events` MOVE PARTITION '2024-01-01' TO TABLE `analytics`.`events_archive`"
     );
 }
 

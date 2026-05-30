@@ -79,12 +79,13 @@ pub use clauses::{
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,
     CreateTable, DataType, DistributedEngine, EngineSetting, EngineSettingValue, IndexType,
-    MergeTree, NestedField, TableEngine, TableIndex, TableProjection, VectorDistanceFunction,
-    VectorIndexAlgorithm, VectorQuantization, VectorSimilarityIndex, aggregating_merge_tree,
-    alter_table, buffer, collapsing_merge_tree, create_materialized_view, create_table,
-    distributed, merge_tree, projection, replacing_merge_tree, replacing_merge_tree_with,
-    summing_merge_tree, summing_merge_tree_with, vector_similarity_index,
-    versioned_collapsing_merge_tree,
+    MergeTree, MutationAssignment, NestedField, PartitionExpr, TableEngine, TableIndex,
+    TableProjection, VectorDistanceFunction, VectorIndexAlgorithm, VectorQuantization,
+    VectorSimilarityIndex, aggregating_merge_tree, all_partitions, alter_table, buffer,
+    collapsing_merge_tree, create_materialized_view, create_table, distributed, merge_tree,
+    mutation_assignment, partition_expr, partition_id, projection, replacing_merge_tree,
+    replacing_merge_tree_with, summing_merge_tree, summing_merge_tree_with,
+    vector_similarity_index, versioned_collapsing_merge_tree,
 };
 pub use functions::{
     abs, any_last, any_value, arg_max, arg_min, array_concat, array_distinct, array_element,

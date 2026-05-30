@@ -27,6 +27,29 @@ pub fn projection(name: impl Into<String>, body: impl Into<String>) -> TableProj
     TableProjection::new(name, body)
 }
 
+/// Build one `ALTER TABLE ... UPDATE column = expr` assignment.
+pub fn mutation_assignment(
+    column: impl Into<String>,
+    expr: impl Into<String>,
+) -> MutationAssignment {
+    MutationAssignment::new(column, expr)
+}
+
+/// Build a raw partition expression for `ALTER TABLE ... PARTITION` operations.
+pub fn partition_expr(expr: impl Into<String>) -> PartitionExpr {
+    PartitionExpr::expr(expr)
+}
+
+/// Build a `PARTITION ID '...'` expression.
+pub fn partition_id(id: impl Into<String>) -> PartitionExpr {
+    PartitionExpr::id(id)
+}
+
+/// Build ClickHouse's `PARTITION ALL` expression where supported.
+pub fn all_partitions() -> PartitionExpr {
+    PartitionExpr::all()
+}
+
 /// Build a ClickHouse `vector_similarity` skipping index.
 pub fn vector_similarity_index(
     name: impl Into<String>,
@@ -207,6 +230,39 @@ enum AlterTableOperation {
     ModifyTtl {
         expr: String,
     },
+    Update {
+        assignments: Vec<MutationAssignment>,
+        partition: Option<PartitionExpr>,
+        predicate: String,
+    },
+    Delete {
+        partition: Option<PartitionExpr>,
+        predicate: String,
+    },
+    DropPartition(PartitionExpr),
+    DetachPartition(PartitionExpr),
+    AttachPartition(PartitionExpr),
+    DropDetachedPartition(PartitionExpr),
+    Freeze {
+        partition: Option<PartitionExpr>,
+        name: Option<String>,
+    },
+    ClearColumnInPartition {
+        name: String,
+        partition: PartitionExpr,
+    },
+    ClearIndexInPartition {
+        name: String,
+        partition: PartitionExpr,
+    },
+    ReplacePartitionFrom {
+        partition: PartitionExpr,
+        table: String,
+    },
+    MovePartitionToTable {
+        partition: PartitionExpr,
+        table: String,
+    },
 }
 
 impl CreateTable {
@@ -361,6 +417,175 @@ impl AlterTable {
         self
     }
 
+    /// Add `UPDATE column = expr[, ...] WHERE predicate`.
+    pub fn update<I>(mut self, assignments: I, predicate: impl Into<String>) -> Self
+    where
+        I: IntoIterator<Item = MutationAssignment>,
+    {
+        self.operation = Some(AlterTableOperation::Update {
+            assignments: assignments.into_iter().collect(),
+            partition: None,
+            predicate: predicate.into(),
+        });
+        self
+    }
+
+    /// Add `UPDATE ... IN PARTITION partition WHERE predicate`.
+    pub fn update_in_partition<I>(
+        mut self,
+        assignments: I,
+        partition: impl Into<PartitionExpr>,
+        predicate: impl Into<String>,
+    ) -> Self
+    where
+        I: IntoIterator<Item = MutationAssignment>,
+    {
+        self.operation = Some(AlterTableOperation::Update {
+            assignments: assignments.into_iter().collect(),
+            partition: Some(partition.into()),
+            predicate: predicate.into(),
+        });
+        self
+    }
+
+    /// Add `DELETE WHERE predicate`.
+    pub fn delete_where(mut self, predicate: impl Into<String>) -> Self {
+        self.operation = Some(AlterTableOperation::Delete {
+            partition: None,
+            predicate: predicate.into(),
+        });
+        self
+    }
+
+    /// Add `DELETE IN PARTITION partition WHERE predicate`.
+    pub fn delete_in_partition(
+        mut self,
+        partition: impl Into<PartitionExpr>,
+        predicate: impl Into<String>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::Delete {
+            partition: Some(partition.into()),
+            predicate: predicate.into(),
+        });
+        self
+    }
+
+    /// Add `DROP PARTITION partition`.
+    pub fn drop_partition(mut self, partition: impl Into<PartitionExpr>) -> Self {
+        self.operation = Some(AlterTableOperation::DropPartition(partition.into()));
+        self
+    }
+
+    /// Add `DETACH PARTITION partition`.
+    pub fn detach_partition(mut self, partition: impl Into<PartitionExpr>) -> Self {
+        self.operation = Some(AlterTableOperation::DetachPartition(partition.into()));
+        self
+    }
+
+    /// Add `ATTACH PARTITION partition`.
+    pub fn attach_partition(mut self, partition: impl Into<PartitionExpr>) -> Self {
+        self.operation = Some(AlterTableOperation::AttachPartition(partition.into()));
+        self
+    }
+
+    /// Add `DROP DETACHED PARTITION partition`.
+    pub fn drop_detached_partition(mut self, partition: impl Into<PartitionExpr>) -> Self {
+        self.operation = Some(AlterTableOperation::DropDetachedPartition(partition.into()));
+        self
+    }
+
+    /// Add `FREEZE` for all partitions.
+    pub fn freeze(mut self) -> Self {
+        self.operation = Some(AlterTableOperation::Freeze {
+            partition: None,
+            name: None,
+        });
+        self
+    }
+
+    /// Add `FREEZE WITH NAME 'backup_name'` for all partitions.
+    pub fn freeze_with_name(mut self, name: impl Into<String>) -> Self {
+        self.operation = Some(AlterTableOperation::Freeze {
+            partition: None,
+            name: Some(name.into()),
+        });
+        self
+    }
+
+    /// Add `FREEZE PARTITION partition`.
+    pub fn freeze_partition(mut self, partition: impl Into<PartitionExpr>) -> Self {
+        self.operation = Some(AlterTableOperation::Freeze {
+            partition: Some(partition.into()),
+            name: None,
+        });
+        self
+    }
+
+    /// Add `FREEZE PARTITION partition WITH NAME 'backup_name'`.
+    pub fn freeze_partition_with_name(
+        mut self,
+        partition: impl Into<PartitionExpr>,
+        name: impl Into<String>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::Freeze {
+            partition: Some(partition.into()),
+            name: Some(name.into()),
+        });
+        self
+    }
+
+    /// Add `CLEAR COLUMN name IN PARTITION partition`.
+    pub fn clear_column_in_partition(
+        mut self,
+        name: impl Into<String>,
+        partition: impl Into<PartitionExpr>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::ClearColumnInPartition {
+            name: name.into(),
+            partition: partition.into(),
+        });
+        self
+    }
+
+    /// Add `CLEAR INDEX name IN PARTITION partition`.
+    pub fn clear_index_in_partition(
+        mut self,
+        name: impl Into<String>,
+        partition: impl Into<PartitionExpr>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::ClearIndexInPartition {
+            name: name.into(),
+            partition: partition.into(),
+        });
+        self
+    }
+
+    /// Add `REPLACE PARTITION partition FROM table`.
+    pub fn replace_partition_from(
+        mut self,
+        partition: impl Into<PartitionExpr>,
+        table: impl Into<String>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::ReplacePartitionFrom {
+            partition: partition.into(),
+            table: table.into(),
+        });
+        self
+    }
+
+    /// Add `MOVE PARTITION partition TO TABLE table`.
+    pub fn move_partition_to_table(
+        mut self,
+        partition: impl Into<PartitionExpr>,
+        table: impl Into<String>,
+    ) -> Self {
+        self.operation = Some(AlterTableOperation::MovePartitionToTable {
+            partition: partition.into(),
+            table: table.into(),
+        });
+        self
+    }
+
     /// Append `SETTINGS name = value` after the ALTER operation.
     pub fn setting(
         mut self,
@@ -425,6 +650,63 @@ enum ColumnDefault {
     Default(String),
     Materialized(String),
     Alias(String),
+}
+
+/// One `column = expr` assignment in an `ALTER TABLE ... UPDATE` mutation.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MutationAssignment {
+    column: String,
+    expr: String,
+}
+
+impl MutationAssignment {
+    /// Create an update assignment. The expression is rendered as raw SQL.
+    pub fn new(column: impl Into<String>, expr: impl Into<String>) -> Self {
+        Self {
+            column: column.into(),
+            expr: expr.into(),
+        }
+    }
+}
+
+/// ClickHouse partition expression for `ALTER TABLE ... PARTITION` operations.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PartitionExpr {
+    /// A raw partition expression such as `"'2024-01-01'"` or `"tuple(2024, 1)"`.
+    Expr(String),
+    /// A string partition identifier rendered as `PARTITION ID '...'`.
+    Id(String),
+    /// The `ALL` keyword where ClickHouse supports it.
+    All,
+}
+
+impl PartitionExpr {
+    /// Create a raw partition expression.
+    pub fn expr(expr: impl Into<String>) -> Self {
+        Self::Expr(expr.into())
+    }
+
+    /// Create a `PARTITION ID '...'` expression.
+    pub fn id(id: impl Into<String>) -> Self {
+        Self::Id(id.into())
+    }
+
+    /// Create `PARTITION ALL`.
+    pub fn all() -> Self {
+        Self::All
+    }
+}
+
+impl From<&str> for PartitionExpr {
+    fn from(value: &str) -> Self {
+        Self::expr(value)
+    }
+}
+
+impl From<String> for PartitionExpr {
+    fn from(value: String) -> Self {
+        Self::expr(value)
+    }
 }
 
 /// One `PROJECTION name (SELECT ...)` definition in `CREATE TABLE` or `ALTER TABLE`.
@@ -1231,9 +1513,154 @@ impl QueryFragment<ClickHouse> for AlterTableOperation {
                 validate_bare_identifier(name, "projection")?;
                 out.push_identifier(name)?;
             }
+            Self::Update {
+                assignments,
+                partition,
+                predicate,
+            } => {
+                push_update_mutation(&mut out, assignments, partition.as_ref(), predicate)?;
+            }
+            Self::Delete {
+                partition,
+                predicate,
+            } => {
+                push_delete_mutation(&mut out, partition.as_ref(), predicate)?;
+            }
+            Self::DropPartition(partition) => {
+                out.push_sql("DROP PARTITION ");
+                push_partition_expr(&mut out, partition, true)?;
+            }
+            Self::DetachPartition(partition) => {
+                out.push_sql("DETACH PARTITION ");
+                push_partition_expr(&mut out, partition, true)?;
+            }
+            Self::AttachPartition(partition) => {
+                out.push_sql("ATTACH PARTITION ");
+                push_partition_expr(&mut out, partition, true)?;
+            }
+            Self::DropDetachedPartition(partition) => {
+                out.push_sql("DROP DETACHED PARTITION ");
+                push_partition_expr(&mut out, partition, true)?;
+            }
+            Self::Freeze { partition, name } => {
+                out.push_sql("FREEZE");
+                if let Some(partition) = partition {
+                    out.push_sql(" PARTITION ");
+                    push_partition_expr(&mut out, partition, false)?;
+                }
+                if let Some(name) = name {
+                    if name.trim().is_empty() {
+                        return Err(Error::QueryBuilderError(
+                            "ClickHouse FREEZE backup name must not be empty".into(),
+                        ));
+                    }
+                    out.push_sql(" WITH NAME ");
+                    push_string_literal(&mut out, name);
+                }
+            }
+            Self::ClearColumnInPartition { name, partition } => {
+                out.push_sql("CLEAR COLUMN ");
+                push_qualified_identifier(&mut out, name)?;
+                out.push_sql(" IN PARTITION ");
+                push_partition_expr(&mut out, partition, false)?;
+            }
+            Self::ClearIndexInPartition { name, partition } => {
+                out.push_sql("CLEAR INDEX ");
+                validate_bare_identifier(name, "index")?;
+                out.push_identifier(name)?;
+                out.push_sql(" IN PARTITION ");
+                push_partition_expr(&mut out, partition, false)?;
+            }
+            Self::ReplacePartitionFrom { partition, table } => {
+                out.push_sql("REPLACE PARTITION ");
+                push_partition_expr(&mut out, partition, false)?;
+                out.push_sql(" FROM ");
+                push_qualified_identifier(&mut out, table)?;
+            }
+            Self::MovePartitionToTable { partition, table } => {
+                out.push_sql("MOVE PARTITION ");
+                push_partition_expr(&mut out, partition, false)?;
+                out.push_sql(" TO TABLE ");
+                push_qualified_identifier(&mut out, table)?;
+            }
         }
         Ok(())
     }
+}
+
+fn push_update_mutation(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    assignments: &[MutationAssignment],
+    partition: Option<&PartitionExpr>,
+    predicate: &str,
+) -> QueryResult<()> {
+    if assignments.is_empty() {
+        return Err(Error::QueryBuilderError(
+            "ClickHouse UPDATE mutation requires at least one assignment".into(),
+        ));
+    }
+    validate_non_empty(predicate, "UPDATE predicate")?;
+
+    out.push_sql("UPDATE ");
+    for (idx, assignment) in assignments.iter().enumerate() {
+        if idx > 0 {
+            out.push_sql(", ");
+        }
+        push_qualified_identifier(out, &assignment.column)?;
+        validate_non_empty(&assignment.expr, "UPDATE expression")?;
+        out.push_sql(" = ");
+        out.push_sql(&assignment.expr);
+    }
+    if let Some(partition) = partition {
+        out.push_sql(" IN PARTITION ");
+        push_partition_expr(out, partition, false)?;
+    }
+    out.push_sql(" WHERE ");
+    out.push_sql(predicate);
+    Ok(())
+}
+
+fn push_delete_mutation(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    partition: Option<&PartitionExpr>,
+    predicate: &str,
+) -> QueryResult<()> {
+    validate_non_empty(predicate, "DELETE predicate")?;
+    out.push_sql("DELETE");
+    if let Some(partition) = partition {
+        out.push_sql(" IN PARTITION ");
+        push_partition_expr(out, partition, false)?;
+    }
+    out.push_sql(" WHERE ");
+    out.push_sql(predicate);
+    Ok(())
+}
+
+fn push_partition_expr(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    partition: &PartitionExpr,
+    allow_all: bool,
+) -> QueryResult<()> {
+    match partition {
+        PartitionExpr::Expr(expr) => {
+            validate_non_empty(expr, "partition expression")?;
+            out.push_sql(expr);
+        }
+        PartitionExpr::Id(id) => {
+            validate_non_empty(id, "partition id")?;
+            out.push_sql("ID ");
+            push_string_literal(out, id);
+        }
+        PartitionExpr::All => {
+            if !allow_all {
+                return Err(Error::QueryBuilderError(
+                    "ClickHouse PARTITION ALL is not supported for this ALTER operation".into(),
+                ));
+            }
+            out.push_sql("ALL");
+        }
+    }
+    Ok(())
 }
 
 impl QueryFragment<ClickHouse> for Column {
