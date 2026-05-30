@@ -133,12 +133,13 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Uniq aggregates | `uniq(x)`, `uniq_exact(x)`, `uniq_if(x, pred)`, `uniq_exact_if(x, pred)` |
 | ✅ 🧪 | Array aggregates | `group_array(x)`, `group_array_if(x, pred)` |
 | ✅ | Arg aggregates | `arg_max(arg, val)`, `arg_min(arg, val)` |
-| ✅ 🧪 | Parametric quantiles | `quantile(0.95, x)`, `quantile_exact(0.5, x)`, `quantile_tdigest(0.99, x)`, `quantiles([0.25, 0.75], x)` |
-| ✅ 🧪 | `topK` | `top_k(10, x)` |
+| ✅ 🧪 | Parametric quantiles | `quantile(0.95, x)`, `quantile_exact(0.5, x)`, `quantile_tdigest(0.99, x)`, `quantile_timing(0.95, x)`, `quantile_deterministic(0.5, x, seed)`, `quantiles([0.25, 0.75], x)`, `quantiles_timing([...], x)` |
+| ✅ 🧪 | `topK` / histograms | `top_k(10, x)`, `histogram(20, x)` |
 | ✅ | Any-value aggregates | `any_value(x)`, `any_last(x)` |
+| ✅ 🧪 | Statistical aggregates | `corr(x, y)`, `covar_pop(x, y)`, `covar_samp(x, y)`, `covar_pop_stable(x, y)`, `covar_samp_stable(x, y)` |
 | ⬜ | General aggregate combinator builder | planned `sum().if_(pred).or_null()`-style API | Could reduce one-off functions. |
 | ✅ 🧪 | State/merge combinators | `sum_state(x)`, `sum_merge(state)`, `count_state()`, `uniq_exact_merge(state)`, `finalize_aggregation(state)` | Includes `AggregateFunction<T>` type marker and DDL type rendering. |
-| ⬜ | More approximate/statistical aggregates | `quantileTiming`, `quantileDeterministic`, `corr`, `covar*`, `histogram` | Add by demand. |
+| 🚧 | More approximate/statistical aggregates | `stddev*`, `var*`, ANOVA, Mann-Whitney, approximate top sum | Add by demand. |
 
 ## Window functions
 

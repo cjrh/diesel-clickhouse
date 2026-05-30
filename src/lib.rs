@@ -58,7 +58,9 @@ mod vectors;
 mod window;
 
 pub use aggregates::{
-    ParametricAggregate, Quantile, quantile, quantile_exact, quantile_tdigest, quantiles, top_k,
+    BinaryParametricAggregate, Histogram, HistogramBucket, ParametricAggregate, Quantile,
+    histogram, quantile, quantile_deterministic, quantile_exact, quantile_tdigest, quantile_timing,
+    quantiles, quantiles_timing, top_k,
 };
 pub use backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, to_sql};
 pub use clauses::{
@@ -82,8 +84,9 @@ pub use ddl::{
 pub use functions::{
     abs, any_last, any_value, arg_max, arg_min, array_concat, array_distinct, array_element,
     array_join, avg_if, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, ceil,
-    city_hash64, concat, cosine_distance, count_if, count_merge, count_merge_state, count_state,
-    cut_query_string, date_diff, date_trunc, domain, domain_without_www, empty, farm_fingerprint64,
+    city_hash64, concat, corr, cosine_distance, count_if, count_merge, count_merge_state,
+    count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable, cut_query_string,
+    date_diff, date_trunc, domain, domain_without_www, empty, farm_fingerprint64,
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array,
     group_array_if, group_array_merge, group_array_state, has, has_all, has_any, hex, if_, int_div,
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,

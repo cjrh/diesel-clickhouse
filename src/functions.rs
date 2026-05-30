@@ -774,3 +774,38 @@ define_sql_function! {
     #[sql_name = "argMin"]
     fn arg_min<T: SqlType + SingleValue, V: SqlType + SingleValue>(arg: T, val: V) -> T;
 }
+
+define_sql_function! {
+    /// `corr(x, y)`.
+    #[aggregate]
+    #[sql_name = "corr"]
+    fn corr<X: SqlType + SingleValue, Y: SqlType + SingleValue>(x: X, y: Y) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `covarPop(x, y)`.
+    #[aggregate]
+    #[sql_name = "covarPop"]
+    fn covar_pop<X: SqlType + SingleValue, Y: SqlType + SingleValue>(x: X, y: Y) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `covarSamp(x, y)`.
+    #[aggregate]
+    #[sql_name = "covarSamp"]
+    fn covar_samp<X: SqlType + SingleValue, Y: SqlType + SingleValue>(x: X, y: Y) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `covarPopStable(x, y)`.
+    #[aggregate]
+    #[sql_name = "covarPopStable"]
+    fn covar_pop_stable<X: SqlType + SingleValue, Y: SqlType + SingleValue>(x: X, y: Y) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `covarSampStable(x, y)`.
+    #[aggregate]
+    #[sql_name = "covarSampStable"]
+    fn covar_samp_stable<X: SqlType + SingleValue, Y: SqlType + SingleValue>(x: X, y: Y) -> diesel::sql_types::Double;
+}

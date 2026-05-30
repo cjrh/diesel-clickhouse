@@ -21,19 +21,21 @@ use testcontainers_modules::{
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, NestedField, OverDsl, Setting,
     TableEngine, TableIndex, abs, aggregating_merge_tree, alter_table, array_count, array_exists,
-    array_filter, array_map, base64_decode, base64_encode, ceil, city_hash64, concat, count_if,
-    count_merge, create_materialized_view, create_table, cut_query_string, date_diff, dense_rank,
-    domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
-    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex,
+    array_filter, array_map, base64_decode, base64_encode, ceil, city_hash64, concat, corr,
+    count_if, count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
+    domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
     json_extract_int, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower, map_apply,
     map_contains, map_filter, max_if, merge_tree, min_if, partition_by, position, prewhere,
-    projection, quantile, quantile_exact, quantiles, rank, regexp_match, replace_all,
-    replacing_merge_tree, rollup, round, row_number, sample_offset, sip_hash64, substring,
-    sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6,
-    to_sql, to_string, to_uint64, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
-    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
-    vector_f32, with_fill, xx_hash64,
+    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
+    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
+    row_number, sample_offset, sip_hash64, substring, sum_merge, sum_state, summing_merge_tree,
+    to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, top_k,
+    top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32, with_fill,
+    xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -645,6 +647,51 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     let quantiles_sql = to_sql(&events.select(quantiles([0.25, 0.5, 0.75], latency_ms)))?;
     let latency_quantiles: Vec<f64> = fixture.client.query(&quantiles_sql).fetch_one().await?;
     assert_eq!(latency_quantiles.len(), 3);
+
+    let timing_quantile_sql = to_sql(&events.select(to_float64(quantile_timing(0.5, latency_ms))))?;
+    let timing_quantile: f64 = fixture
+        .client
+        .query(&timing_quantile_sql)
+        .fetch_one()
+        .await?;
+    assert!((10.0..=60.0).contains(&timing_quantile));
+
+    let deterministic_quantile_sql =
+        to_sql(&events.select(quantile_deterministic(0.5, latency_ms, id)))?;
+    let deterministic_quantile: f64 = fixture
+        .client
+        .query(&deterministic_quantile_sql)
+        .fetch_one()
+        .await?;
+    assert!((10.0..=60.0).contains(&deterministic_quantile));
+
+    let quantiles_timing_len_sql =
+        to_sql(&events.select(length(quantiles_timing([0.5, 0.95], latency_ms))))?;
+    let timing_quantile_count: u64 = fixture
+        .client
+        .query(&quantiles_timing_len_sql)
+        .fetch_one()
+        .await?;
+    assert_eq!(timing_quantile_count, 2);
+
+    let histogram_len_sql = to_sql(&events.select(length(histogram(3, latency_ms))))?;
+    let histogram_bucket_count: u64 = fixture.client.query(&histogram_len_sql).fetch_one().await?;
+    assert_eq!(histogram_bucket_count, 3);
+
+    let statistical_sql = to_sql(&events.select((
+        corr(latency_ms, to_float64(id)),
+        covar_pop(latency_ms, to_float64(id)),
+        covar_samp(latency_ms, to_float64(id)),
+        covar_pop_stable(latency_ms, to_float64(id)),
+        covar_samp_stable(latency_ms, to_float64(id)),
+    )))?;
+    let statistical_row: (f64, f64, f64, f64, f64) =
+        fixture.client.query(&statistical_sql).fetch_one().await?;
+    assert!((statistical_row.0 - 1.0).abs() < 1e-12);
+    assert!((statistical_row.1 - 29.166666666666668).abs() < 1e-9);
+    assert!((statistical_row.2 - 35.0).abs() < 1e-9);
+    assert!((statistical_row.3 - 29.166666666666668).abs() < 1e-9);
+    assert!((statistical_row.4 - 35.0).abs() < 1e-9);
 
     let top_success_sql = to_sql(&events.select(top_k(1, success)))?;
     let top_successes: Vec<bool> = fixture.client.query(&top_success_sql).fetch_one().await?;
