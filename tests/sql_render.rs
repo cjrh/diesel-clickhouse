@@ -1,26 +1,26 @@
 use diesel::prelude::*;
 use diesel_clickhouse::{
-    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField, OverDsl, Setting,
-    TableEngine, TableIndex, VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs,
-    aggregating_merge_tree, alter_table, array_all, array_count, array_exists, array_filter,
-    array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, ceil,
-    city_hash64, collapsing_merge_tree, concat, cosine_distance, count_if, count_merge,
-    count_merge_state, count_state, create_materialized_view, create_table, cube, cut_query_string,
-    date_diff, dense_rank, distributed, domain, domain_without_www, farm_fingerprint64,
-    final_table, finalize_aggregation, first_significant_subdomain, floor, greatest,
-    group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex, if_,
-    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    json_extract_int, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2,
-    least, length, linf_distance, linf_norm, lower, map_apply, map_contains, map_filter,
-    map_from_arrays, map_keys, map_values, max_merge, max_state, min_merge, min_state,
-    partition_by, position, prewhere, projection, quantile, quantile_exact, quantiles, rank,
-    regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
-    sample_offset, sip_hash64, substring, sum_merge, sum_merge_state, sum_state,
-    summing_merge_tree_with, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql,
-    to_start_of_hour, to_string, to_uint64, top_k, top_level_domain, try_base64_decode, unhex,
-    uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path,
-    url_path_full, url_protocol, url_query_string, vector_f32, vector_f64, vector_similarity_index,
-    versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
+    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField,
+    OutfileCompression, OverDsl, Setting, TableEngine, TableIndex, VectorDistanceFunction,
+    VectorQuantization, WindowFrameBound, abs, aggregating_merge_tree, alter_table, array_all,
+    array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state,
+    base64_decode, base64_encode, buffer, ceil, city_hash64, collapsing_merge_tree, concat,
+    cosine_distance, count_if, count_merge, count_merge_state, count_state,
+    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank,
+    distributed, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_array_merge, group_array_state,
+    group_by_all, grouping, grouping_sets, hex, if_, ipv4_num_to_string, ipv4_string_to_num,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, json_extract_int, l1_distance, l1_norm,
+    l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least, length, linf_distance, linf_norm,
+    lower, map_apply, map_contains, map_filter, map_from_arrays, map_keys, map_values, max_merge,
+    max_state, min_merge, min_state, partition_by, position, prewhere, projection, quantile,
+    quantile_exact, quantiles, rank, regexp_match, replace_all, replacing_merge_tree, rollup,
+    round, row_number, sample, sample_offset, sip_hash64, substring, sum_merge, sum_merge_state,
+    sum_state, summing_merge_tree_with, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6,
+    to_sql, to_start_of_hour, to_string, to_uint64, top_k, top_level_domain, try_base64_decode,
+    unhex, uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment,
+    url_path, url_path_full, url_protocol, url_query_string, vector_f32, vector_f64,
+    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -902,6 +902,41 @@ fn renders_create_materialized_view_ddl() {
     assert_eq!(
         to_sql(&engine_view).unwrap(),
         "CREATE MATERIALIZED VIEW `analytics`.`events_owned_mv` ENGINE = SummingMergeTree ORDER BY tenant_id POPULATE AS SELECT `events`.`tenant_id`, countIf(`events`.`success`) FROM `events` GROUP BY `events`.`tenant_id`"
+    );
+}
+
+#[test]
+fn renders_into_outfile_query_wrapper() {
+    use self::events::dsl::*;
+
+    let csv_export = events
+        .select((id, tenant_id))
+        .filter(success.eq(true))
+        .into_outfile("exports/events.csv.gz")
+        .and_stdout()
+        .truncate()
+        .compression_with_level(OutfileCompression::Gzip, 6)
+        .format(Format::Csv);
+    let append_export = events
+        .select(id)
+        .into_outfile("exports/events.tsv")
+        .append();
+    let no_compression_export = events
+        .select(id)
+        .into_outfile("exports/events.raw")
+        .compression(OutfileCompression::None);
+
+    assert_eq!(
+        to_sql(&csv_export).unwrap(),
+        "SELECT `events`.`id`, `events`.`tenant_id` FROM `events` WHERE (`events`.`success` = ?) INTO OUTFILE 'exports/events.csv.gz' AND STDOUT TRUNCATE COMPRESSION 'gzip' LEVEL 6 FORMAT CSV"
+    );
+    assert_eq!(
+        to_sql(&append_export).unwrap(),
+        "SELECT `events`.`id` FROM `events` INTO OUTFILE 'exports/events.tsv' APPEND"
+    );
+    assert_eq!(
+        to_sql(&no_compression_export).unwrap(),
+        "SELECT `events`.`id` FROM `events` INTO OUTFILE 'exports/events.raw' COMPRESSION 'none'"
     );
 }
 

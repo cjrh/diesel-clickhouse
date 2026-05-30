@@ -140,6 +140,18 @@ pub fn format<Q>(query: Q, format: Format) -> FormattedQuery<Q> {
     FormattedQuery { query, format }
 }
 
+/// Append ClickHouse's `INTO OUTFILE file_name` clause to a query.
+pub fn into_outfile<Q>(query: Q, file_name: impl Into<String>) -> IntoOutfileQuery<Q> {
+    IntoOutfileQuery {
+        query,
+        file_name: file_name.into(),
+        and_stdout: false,
+        mode: None,
+        compression: None,
+        compression_level: None,
+    }
+}
+
 /// Append `SETTINGS ...` to a query.
 pub fn settings<Q, I>(query: Q, settings: I) -> SettingsQuery<Q>
 where
@@ -224,6 +236,11 @@ pub trait ClickHouseQueryDsl: Sized {
     /// Append `FORMAT <format>`.
     fn format(self, format: Format) -> FormattedQuery<Self> {
         crate::clauses::format(self, format)
+    }
+
+    /// Append `INTO OUTFILE file_name`.
+    fn into_outfile(self, file_name: impl Into<String>) -> IntoOutfileQuery<Self> {
+        crate::clauses::into_outfile(self, file_name)
     }
 
     /// Append `SETTINGS ...`.
@@ -423,6 +440,17 @@ pub struct FormattedQuery<Q> {
     format: Format,
 }
 
+/// Query wrapper that appends ClickHouse's `INTO OUTFILE` clause.
+#[derive(Debug, Clone)]
+pub struct IntoOutfileQuery<Q> {
+    query: Q,
+    file_name: String,
+    and_stdout: bool,
+    mode: Option<OutfileMode>,
+    compression: Option<OutfileCompression>,
+    compression_level: Option<u8>,
+}
+
 /// Query wrapper that appends a ClickHouse `SETTINGS` clause.
 #[derive(Debug, Clone)]
 pub struct SettingsQuery<Q> {
@@ -471,6 +499,42 @@ pub struct WithCteBinding<Tail, Cte> {
     alias: String,
     query: Cte,
     materialized: bool,
+}
+
+impl<Q> IntoOutfileQuery<Q> {
+    /// Also write the exported rows to stdout.
+    pub fn and_stdout(mut self) -> Self {
+        self.and_stdout = true;
+        self
+    }
+
+    /// Append to an existing file.
+    ///
+    /// ClickHouse does not allow `APPEND` together with `COMPRESSION`; this is
+    /// validated during SQL rendering.
+    pub fn append(mut self) -> Self {
+        self.mode = Some(OutfileMode::Append);
+        self
+    }
+
+    /// Truncate an existing file before writing.
+    pub fn truncate(mut self) -> Self {
+        self.mode = Some(OutfileMode::Truncate);
+        self
+    }
+
+    /// Add an explicit `COMPRESSION` clause.
+    pub fn compression(mut self, compression: OutfileCompression) -> Self {
+        self.compression = Some(compression);
+        self
+    }
+
+    /// Add `COMPRESSION type LEVEL level`.
+    pub fn compression_with_level(mut self, compression: OutfileCompression, level: u8) -> Self {
+        self.compression = Some(compression);
+        self.compression_level = Some(level);
+        self
+    }
 }
 
 impl<Q, Bindings> WithQuery<Q, Bindings> {
@@ -557,6 +621,50 @@ impl Format {
             Self::Arrow => "Arrow",
             Self::Null => "Null",
             Self::Custom(name) => name,
+        }
+    }
+}
+
+/// Existing-file behavior for `INTO OUTFILE`.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum OutfileMode {
+    Append,
+    Truncate,
+}
+
+/// Compression algorithms supported by ClickHouse `INTO OUTFILE`.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum OutfileCompression {
+    None,
+    Gzip,
+    Deflate,
+    Brotli,
+    Xz,
+    Zstd,
+    Lz4,
+    Bz2,
+}
+
+impl OutfileCompression {
+    fn as_sql(self) -> &'static str {
+        match self {
+            Self::None => "none",
+            Self::Gzip => "gzip",
+            Self::Deflate => "deflate",
+            Self::Brotli => "br",
+            Self::Xz => "xz",
+            Self::Zstd => "zstd",
+            Self::Lz4 => "lz4",
+            Self::Bz2 => "bz2",
+        }
+    }
+
+    fn max_level(self) -> Option<u8> {
+        match self {
+            Self::None => None,
+            Self::Lz4 => Some(12),
+            Self::Zstd => Some(22),
+            Self::Gzip | Self::Deflate | Self::Brotli | Self::Xz | Self::Bz2 => Some(9),
         }
     }
 }
@@ -929,6 +1037,7 @@ macro_rules! impl_query_wrapper_traits {
 }
 
 impl_query_wrapper_traits!(FormattedQuery<Q>);
+impl_query_wrapper_traits!(IntoOutfileQuery<Q>);
 impl_query_wrapper_traits!(SettingsQuery<Q>);
 impl_query_wrapper_traits!(LimitBy<Q>);
 impl_query_wrapper_traits!(LimitWithTies<Q>);
@@ -939,6 +1048,14 @@ where
     Q: QueryId,
 {
     type QueryId = FormattedQuery<Q::QueryId>;
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<Q> QueryId for IntoOutfileQuery<Q>
+where
+    Q: QueryId,
+{
+    type QueryId = IntoOutfileQuery<Q::QueryId>;
     const HAS_STATIC_QUERY_ID: bool = false;
 }
 
@@ -984,6 +1101,67 @@ where
         validate_bare_identifier(format, "FORMAT")?;
         out.push_sql(" FORMAT ");
         out.push_sql(format);
+        Ok(())
+    }
+}
+
+impl<Q> QueryFragment<ClickHouse> for IntoOutfileQuery<Q>
+where
+    Q: QueryFragment<ClickHouse>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        if self.file_name.trim().is_empty() {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse INTO OUTFILE file name must not be empty".into(),
+            ));
+        }
+        if self.mode == Some(OutfileMode::Append) && self.compression.is_some() {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse INTO OUTFILE APPEND cannot be used with COMPRESSION".into(),
+            ));
+        }
+        let compression = self.compression;
+        if let Some(level) = self.compression_level {
+            let Some(compression) = compression else {
+                return Err(Error::QueryBuilderError(
+                    "ClickHouse INTO OUTFILE LEVEL requires COMPRESSION".into(),
+                ));
+            };
+            let Some(max_level) = compression.max_level() else {
+                return Err(Error::QueryBuilderError(
+                    "ClickHouse INTO OUTFILE COMPRESSION 'none' does not support LEVEL".into(),
+                ));
+            };
+            if level == 0 || level > max_level {
+                return Err(Error::QueryBuilderError(
+                    format!(
+                        "ClickHouse INTO OUTFILE COMPRESSION '{}' LEVEL must be between 1 and {max_level}, got {level}",
+                        compression.as_sql()
+                    )
+                    .into(),
+                ));
+            }
+        }
+
+        self.query.walk_ast(out.reborrow())?;
+        out.push_sql(" INTO OUTFILE ");
+        push_string_literal(&mut out, &self.file_name);
+        if self.and_stdout {
+            out.push_sql(" AND STDOUT");
+        }
+        match self.mode {
+            Some(OutfileMode::Append) => out.push_sql(" APPEND"),
+            Some(OutfileMode::Truncate) => out.push_sql(" TRUNCATE"),
+            None => {}
+        }
+        if let Some(compression) = compression {
+            out.push_sql(" COMPRESSION ");
+            push_string_literal(&mut out, compression.as_sql());
+            if let Some(level) = self.compression_level {
+                out.push_sql(" LEVEL ");
+                out.push_sql(&level.to_string());
+            }
+        }
         Ok(())
     }
 }

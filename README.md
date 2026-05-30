@@ -29,7 +29,7 @@ let sql = to_sql(&query)?;
 - Function bindings via Diesel macros/custom fragments: `toStartOf*`, `toDateTime*`, `dateDiff`, `dateTrunc`, type conversions, string/numeric helpers, URL/IP/encoding/hash helpers, vector distance helpers, lambda-based array/map helpers, `if`, `countIf`, `sumIf`, `avgIf`, `minIf`, `maxIf`, aggregate state/merge combinators, `uniq*`, `groupArray*`, `any*`, `argMax`, `argMin`, array/map/JSON helpers
 - Parametric aggregate fragments: `quantile*`, `quantiles`, `topK`
 - Grouping modifiers: `WITH TOTALS`, `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUP BY ALL`, `GROUPING()`
-- Query wrappers for scalar `WITH` aliases, CTEs, `QUALIFY`, named `WINDOW`, `LIMIT BY`, `LIMIT ... WITH TIES`, `ORDER BY ... WITH FILL`, `SETTINGS`, `FORMAT`
+- Query wrappers for scalar `WITH` aliases, CTEs, `QUALIFY`, named `WINDOW`, `LIMIT BY`, `LIMIT ... WITH TIES`, `ORDER BY ... WITH FILL`, `SETTINGS`, `FORMAT`, `INTO OUTFILE`
 - Source wrappers for `FINAL`, `SAMPLE`, `SAMPLE ... OFFSET`, `PREWHERE`, `ARRAY JOIN`, `LEFT ARRAY JOIN`, ClickHouse `GLOBAL`/`ANY`/`ALL`/`ASOF`/`SEMI`/`ANTI` joins
 - Window helpers: `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `.over(...)`, `.over_window(...)`, `ROWS`/`RANGE` frame builders
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and common `ALTER TABLE` operations

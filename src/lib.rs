@@ -62,12 +62,12 @@ pub use aggregates::{
 };
 pub use backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, to_sql};
 pub use clauses::{
-    ArrayJoin, ArrayJoinKind, ClickHouseQueryDsl, Final, Format, FormattedQuery, LimitBy,
-    LimitWithTies, NoSampleOffset, NoWithBindings, Prewhere, Sample, SampleOffset, Setting,
-    SettingValue, SettingsQuery, WithBinding, WithCteBinding, WithQuery, array_join_clause,
-    array_join_clause_as, final_table, format, left_array_join_clause, left_array_join_clause_as,
-    limit_by_col, prewhere, sample, sample_offset, settings, with_alias, with_cte,
-    with_materialized_cte, with_ties,
+    ArrayJoin, ArrayJoinKind, ClickHouseQueryDsl, Final, Format, FormattedQuery, IntoOutfileQuery,
+    LimitBy, LimitWithTies, NoSampleOffset, NoWithBindings, OutfileCompression, OutfileMode,
+    Prewhere, Sample, SampleOffset, Setting, SettingValue, SettingsQuery, WithBinding,
+    WithCteBinding, WithQuery, array_join_clause, array_join_clause_as, final_table, format,
+    into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col, prewhere,
+    sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
 };
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,

@@ -65,7 +65,7 @@ Legend:
 | ✅ 🧪 | `QUALIFY` | `query.qualify(row_number().over(...).eq(1))` | `QUALIFY ...` |
 | ✅ 🧪 | `WINDOW` clause | `query.window("w", partition_by(...).order_by(...))` | `WINDOW w AS (...)` |
 | ✅ 🧪 | `ORDER BY ... WITH FILL` | `order(with_fill(ts).from(a).to(b).step(s))` | `ORDER BY ts WITH FILL ...` |
-| ⬜ | `INTO OUTFILE` | planned final query wrapper | `INTO OUTFILE ...` |
+| ✅ | `INTO OUTFILE` | `query.into_outfile("export.csv").truncate().format(Format::Csv)` | Render-tested only; ClickHouse docs note it is CLI/local-client functionality and fails via HTTP. |
 
 ## GROUP BY extensions
 
