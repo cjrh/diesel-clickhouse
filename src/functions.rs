@@ -298,6 +298,12 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `mapFromArrays(keys, values)`.
+    #[sql_name = "mapFromArrays"]
+    fn map_from_arrays<K: SqlType + SingleValue, V: SqlType + SingleValue>(keys: Array<K>, values: Array<V>) -> crate::types::Map<K, V>;
+}
+
+define_sql_function! {
     /// `JSONExtractString(json, key)`.
     #[sql_name = "JSONExtractString"]
     fn json_extract_string<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Text;

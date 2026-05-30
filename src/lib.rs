@@ -48,6 +48,7 @@ mod clauses;
 mod ddl;
 mod functions;
 mod grouping;
+mod higher_order;
 mod joins;
 mod operators;
 mod ordering;
@@ -69,11 +70,14 @@ pub use clauses::{
     with_materialized_cte, with_ties,
 };
 pub use ddl::{
-    AlterTable, Column, CreateMaterializedView, CreateMaterializedViewBuilder, CreateTable,
-    DataType, EngineSetting, EngineSettingValue, IndexType, MergeTree, NestedField, TableEngine,
-    TableIndex, VectorDistanceFunction, VectorIndexAlgorithm, VectorQuantization,
-    VectorSimilarityIndex, alter_table, create_materialized_view, create_table, merge_tree,
-    replacing_merge_tree, replacing_merge_tree_with, vector_similarity_index,
+    AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,
+    CreateTable, DataType, DistributedEngine, EngineSetting, EngineSettingValue, IndexType,
+    MergeTree, NestedField, TableEngine, TableIndex, TableProjection, VectorDistanceFunction,
+    VectorIndexAlgorithm, VectorQuantization, VectorSimilarityIndex, aggregating_merge_tree,
+    alter_table, buffer, collapsing_merge_tree, create_materialized_view, create_table,
+    distributed, merge_tree, projection, replacing_merge_tree, replacing_merge_tree_with,
+    summing_merge_tree, summing_merge_tree_with, vector_similarity_index,
+    versioned_collapsing_merge_tree,
 };
 pub use functions::{
     abs, any_last, any_value, arg_max, arg_min, array_concat, array_distinct, array_element,
@@ -85,18 +89,23 @@ pub use functions::{
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
     json_extract_bool, json_extract_float, json_extract_int, json_extract_raw, json_extract_string,
     l1_distance, l1_norm, l2_distance, l2_norm, least, length, linf_distance, linf_norm, lower,
-    map_contains, map_keys, map_values, max_if, max_merge, max_state, min_if, min_merge, min_state,
-    not_empty, position, regexp_match, replace_all, round, sip_hash64, substring, sum_if,
-    sum_merge, sum_merge_state, sum_state, to_date, to_date_time, to_date_time64, to_day_of_month,
-    to_float64, to_hour, to_int64, to_ipv4, to_ipv6, to_minute, to_month, to_start_of_day,
-    to_start_of_hour, to_start_of_minute, to_start_of_month, to_start_of_year, to_string,
-    to_uint64, to_unix_timestamp, to_year, top_level_domain, try_base64_decode, unhex, uniq,
-    uniq_exact, uniq_exact_if, uniq_exact_merge, uniq_exact_state, uniq_if, uniq_merge, uniq_state,
-    upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string, xx_hash64,
+    map_contains, map_from_arrays, map_keys, map_values, max_if, max_merge, max_state, min_if,
+    min_merge, min_state, not_empty, position, regexp_match, replace_all, round, sip_hash64,
+    substring, sum_if, sum_merge, sum_merge_state, sum_state, to_date, to_date_time,
+    to_date_time64, to_day_of_month, to_float64, to_hour, to_int64, to_ipv4, to_ipv6, to_minute,
+    to_month, to_start_of_day, to_start_of_hour, to_start_of_minute, to_start_of_month,
+    to_start_of_year, to_string, to_uint64, to_unix_timestamp, to_year, top_level_domain,
+    try_base64_decode, unhex, uniq, uniq_exact, uniq_exact_if, uniq_exact_merge, uniq_exact_state,
+    uniq_if, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full, url_protocol,
+    url_query_string, xx_hash64,
 };
 pub use grouping::{
     GroupByAll, GroupByModifier, GroupByModifierKind, Grouping, GroupingSets, cube, group_by_all,
     grouping, grouping_sets, rollup, with_totals,
+};
+pub use higher_order::{
+    HigherOrderFunction, Lambda, array_all, array_count, array_exists, array_filter, array_map,
+    array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
 };
 pub use joins::{
     ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinKind, JoinModifier, JoinOn,

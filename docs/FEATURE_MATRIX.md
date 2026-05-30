@@ -96,7 +96,7 @@ Legend:
 | ✅ | `GLOBAL IN` | `tenant_id.global_in(subquery)` |
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
 | ➡️ | Regular comparison/logical operators | Diesel built-ins. |
-| ⬜ | ClickHouse lambda operators | planned higher-order array helpers. |
+| ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
 | ⬜ | `LIKE` variants / regexp helpers | planned `match`, `multiMatch*`, `like` examples. |
 
 ## Scalar functions
@@ -105,8 +105,8 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ 🧪 | Date/time conversion and bucketing | `to_date`, `to_date_time`, `to_date_time64`, `to_start_of_*`, `date_diff`, `date_trunc`, `to_year`, `to_month`, `to_hour` | intervals, timezone variants, `now*`, `parseDateTime*` |
 | ✅ 🧪 | Conditional/basic/numeric helpers | `if_`, `length`, `empty`, `not_empty`, `int_div`, `abs`, `round`, `floor`, `ceil`, `least`, `greatest` | `multiIf`, `coalesce`, `assumeNotNull` |
-| ✅ 🧪 | Arrays | `has`, `has_any`, `has_all`, `array_join`, `array_element`, `array_concat`, `array_distinct` | `arrayMap`, `arrayFilter`, `arrayExists`, lambda support |
-| ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains` | `mapApply`, `mapFilter`, `mapFromArrays`, subscript helpers |
+| ✅ 🧪 | Arrays | `has`, `has_any`, `has_all`, `array_join`, `array_element`, `array_concat`, `array_distinct`, `array_map`, `array_filter`, `array_exists`, `array_all`, `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
+| ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
 | ✅ 🧪 | JSON | `json_extract_string`, `json_extract_int`, `json_extract_float`, `json_extract_bool`, `json_extract_raw` | case-insensitive variants, paths, dynamic JSON subcolumns |
 | ✅ 🧪 | Strings | `lower`, `upper`, `substring`, `position`, `replace_all`, `concat`, `regexp_match` | more regexp/search variants, token functions |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain`, `domain_without_www`, `top_level_domain`, `url_path`, `base64_encode`, `hex`, `city_hash64`, `to_ipv4`, `is_ipv6_string` | More specialized variants can be added by demand. |
@@ -156,12 +156,13 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | Status | Feature | Example DSL |
 | --- | --- | --- |
 | ✅ 🧪 | `CREATE TABLE` builder | `create_table("events").column(...).engine(...)` |
-| ✅ 🧪 | MergeTree family engines | `merge_tree().order_by([...])`, `replacing_merge_tree()` |
+| ✅ 🧪 | MergeTree family engines | `merge_tree()`, `replacing_merge_tree()`, `summing_merge_tree()`, `aggregating_merge_tree()`, `collapsing_merge_tree("sign")`, `versioned_collapsing_merge_tree("sign", "version")` |
 | ✅ 🧪 | Engine modifiers | `.partition_by(...)`, `.primary_key(...)`, `.order_by(...)`, `.sample_by(...)`, `.ttl(...)`, `.setting(...)` |
+| ✅ 🧪 | Special engines | `TableEngine::memory()`, `TableEngine::null()`, `distributed(...).sharding_key(...)`, `buffer(...)` |
 | ✅ 🧪 | Column codecs/default/materialized/alias | `Column::new(...).default_expr(...)`, `.materialized_expr(...)`, `.alias_expr(...)`, `.codec(...)` |
-| 🚧 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)` implemented; generic custom indexes available; projections planned |
+| ✅ 🧪 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)`, `TableIndex::custom(...)`, `projection("by_tenant", "SELECT ...")`, `alter_table(...).add_projection(...)` |
 | ✅ 🧪 | Materialized views | `create_materialized_view("events_mv").to("target").as_select(query)` |
-| 🚧 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`, `.rename_column(...)`, `.add_index(...)`, `.materialize_index(...)` | Column/index lifecycle and `MODIFY TTL` implemented; mutations and partitions planned. |
+| 🚧 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`, `.rename_column(...)`, `.add_index(...)`, `.materialize_index(...)`, `.add_projection(...)`, `.materialize_projection(...)` | Column/index/projection lifecycle and `MODIFY TTL` implemented; mutations and partitions planned. |
 
 ## Test policy
 

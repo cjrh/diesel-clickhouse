@@ -20,18 +20,20 @@ use testcontainers_modules::{
 
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, NestedField, OverDsl, Setting,
-    TableEngine, TableIndex, abs, alter_table, base64_decode, base64_encode, ceil, city_hash64,
-    concat, count_if, count_merge, create_materialized_view, create_table, cut_query_string,
-    date_diff, dense_rank, domain, domain_without_www, farm_fingerprint64, final_table,
-    finalize_aggregation, first_significant_subdomain, floor, greatest, group_by_all,
-    grouping_sets, hex, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
-    is_ipv6_string, json_extract_int, l2_distance, lag_in_frame, least, length, lower,
-    map_contains, max_if, min_if, partition_by, position, prewhere, quantile, quantile_exact,
-    quantiles, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number,
-    sample_offset, sip_hash64, substring, sum_merge, sum_state, to_date_time, to_float64, to_int64,
-    to_ipv4, to_ipv6, to_sql, to_string, to_uint64, top_k, top_level_domain, try_base64_decode,
-    unhex, uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path, url_path_full,
-    url_protocol, url_query_string, vector_f32, with_fill, xx_hash64,
+    TableEngine, TableIndex, abs, aggregating_merge_tree, alter_table, array_count, array_exists,
+    array_filter, array_map, base64_decode, base64_encode, ceil, city_hash64, concat, count_if,
+    count_merge, create_materialized_view, create_table, cut_query_string, date_diff, dense_rank,
+    domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex,
+    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
+    json_extract_int, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower, map_apply,
+    map_contains, map_filter, max_if, merge_tree, min_if, partition_by, position, prewhere,
+    projection, quantile, quantile_exact, quantiles, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample_offset, sip_hash64, substring,
+    sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6,
+    to_sql, to_string, to_uint64, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
+    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
+    vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -140,6 +142,8 @@ async fn setup(client: &clickhouse::Client) -> TestResult<()> {
         "DROP TABLE IF EXISTS diesel_clickhouse_mv_source",
         "DROP TABLE IF EXISTS diesel_clickhouse_image_vectors",
         "DROP TABLE IF EXISTS diesel_clickhouse_type_showcase",
+        "DROP TABLE IF EXISTS diesel_clickhouse_projection_rollups",
+        "DROP TABLE IF EXISTS diesel_clickhouse_summing_rollups",
         "CREATE TABLE diesel_clickhouse_events (
             id UInt64,
             tenant_id String,
@@ -264,6 +268,44 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .await?;
     assert_eq!(type_showcase_exists, 1);
 
+    let projection_rollups_ddl = create_table("diesel_clickhouse_projection_rollups")
+        .column("tenant_id", DataType::String)
+        .column("bucket", DataType::Date)
+        .column("hits", DataType::UInt64)
+        .projection(projection(
+            "by_tenant",
+            "SELECT tenant_id, sum(hits) GROUP BY tenant_id",
+        ))
+        .engine(merge_tree().order_by(["tenant_id", "bucket"]));
+    fixture
+        .client
+        .query(&to_sql(&projection_rollups_ddl)?)
+        .execute()
+        .await?;
+    let projection_exists: u64 = fixture
+        .client
+        .query("SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'diesel_clickhouse_projection_rollups' AND create_table_query LIKE '%PROJECTION%by_tenant%'")
+        .fetch_one()
+        .await?;
+    assert_eq!(projection_exists, 1);
+
+    let summing_rollups_ddl = create_table("diesel_clickhouse_summing_rollups")
+        .column("tenant_id", DataType::String)
+        .column("bucket", DataType::Date)
+        .column("hits", DataType::UInt64)
+        .engine(summing_merge_tree().order_by(["tenant_id", "bucket"]));
+    fixture
+        .client
+        .query(&to_sql(&summing_rollups_ddl)?)
+        .execute()
+        .await?;
+    let summing_exists: u64 = fixture
+        .client
+        .query("SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'diesel_clickhouse_summing_rollups'")
+        .fetch_one()
+        .await?;
+    assert_eq!(summing_exists, 1);
+
     let aggregate_states_ddl = create_table("diesel_clickhouse_aggregate_states")
         .column("state_key", DataType::UInt64)
         .column(
@@ -275,9 +317,7 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             "exact_ids",
             DataType::aggregate_function("uniqExact", [DataType::UInt64]),
         )
-        .engine(TableEngine::custom(
-            "AggregatingMergeTree ORDER BY state_key",
-        ));
+        .engine(aggregating_merge_tree().order_by(["state_key"]));
     fixture
         .client
         .query(&to_sql(&aggregate_states_ddl)?)
@@ -848,6 +888,32 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .await?;
     assert_eq!(scalar_row, (2, true, 10, 2));
 
+    let higher_order_sql = to_sql(&events.filter(id.eq(1)).select((
+        to_string(array_map(lambda("tag", "upper(tag)"), tags)),
+        to_string(array_filter(lambda("tag", "tag = 'paid'"), tags)),
+        to_uint64(array_exists(lambda("tag", "tag = 'mobile'"), tags)),
+        to_uint64(array_count(lambda("tag", "tag = 'paid'"), tags)),
+        to_uint64(map_contains(
+            map_filter(lambda2("k", "v", "k = 'country'"), attrs),
+            "country",
+        )),
+        to_string(map_apply(lambda2("k", "v", "(k, upper(v))"), attrs)),
+    )))?;
+    let higher_order_row: (String, String, u64, u64, u64, String) = fixture
+        .client
+        .query(&higher_order_sql)
+        .bind("country")
+        .bind(1_i64)
+        .fetch_one()
+        .await?;
+    assert_eq!(higher_order_row.0, "['PAID','MOBILE']");
+    assert_eq!(higher_order_row.1, "['paid']");
+    assert_eq!(higher_order_row.2, 1);
+    assert_eq!(higher_order_row.3, 1);
+    assert_eq!(higher_order_row.4, 1);
+    assert!(higher_order_row.5.contains("'country':'US'"));
+    assert!(higher_order_row.5.contains("'plan':'PRO'"));
+
     let string_sql = to_sql(&events.filter(id.eq(1)).select((
         lower(tenant_id),
         upper(tenant_id),
@@ -1073,6 +1139,16 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     fixture
         .client
         .query("DROP TABLE diesel_clickhouse_type_showcase")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_projection_rollups")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_summing_rollups")
         .execute()
         .await?;
     fixture

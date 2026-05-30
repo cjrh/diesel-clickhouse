@@ -2,22 +2,25 @@ use diesel::prelude::*;
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField, OverDsl, Setting,
     TableEngine, TableIndex, VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs,
-    alter_table, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, ceil,
-    city_hash64, concat, cosine_distance, count_if, count_merge, count_merge_state, count_state,
-    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank, domain,
-    domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
-    first_significant_subdomain, floor, greatest, group_array_merge, group_array_state,
-    group_by_all, grouping, grouping_sets, hex, if_, ipv4_num_to_string, ipv4_string_to_num,
-    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, json_extract_int, l1_distance, l1_norm,
-    l2_distance, l2_norm, lag_in_frame, least, length, linf_distance, linf_norm, lower,
-    map_contains, max_merge, max_state, min_merge, min_state, partition_by, position, prewhere,
-    quantile, quantile_exact, quantiles, rank, regexp_match, replace_all, replacing_merge_tree,
-    rollup, round, row_number, sample, sample_offset, sip_hash64, substring, sum_merge,
-    sum_merge_state, sum_state, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql,
+    aggregating_merge_tree, alter_table, array_all, array_count, array_exists, array_filter,
+    array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, ceil,
+    city_hash64, collapsing_merge_tree, concat, cosine_distance, count_if, count_merge,
+    count_merge_state, count_state, create_materialized_view, create_table, cube, cut_query_string,
+    date_diff, dense_rank, distributed, domain, domain_without_www, farm_fingerprint64,
+    final_table, finalize_aggregation, first_significant_subdomain, floor, greatest,
+    group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex, if_,
+    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
+    json_extract_int, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2,
+    least, length, linf_distance, linf_norm, lower, map_apply, map_contains, map_filter,
+    map_from_arrays, map_keys, map_values, max_merge, max_state, min_merge, min_state,
+    partition_by, position, prewhere, projection, quantile, quantile_exact, quantiles, rank,
+    regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
+    sample_offset, sip_hash64, substring, sum_merge, sum_merge_state, sum_state,
+    summing_merge_tree_with, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql,
     to_start_of_hour, to_string, to_uint64, top_k, top_level_domain, try_base64_decode, unhex,
     uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path,
     url_path_full, url_protocol, url_query_string, vector_f32, vector_f64, vector_similarity_index,
-    with_fill, with_totals, xx_hash64,
+    versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -224,6 +227,33 @@ fn renders_url_ip_encoding_and_hash_functions() {
     assert_eq!(
         to_sql(&ip_query).unwrap(),
         "SELECT toString(toIPv4(`events`.`payload`)), toString(toIPv6(`events`.`payload`)), IPv4NumToString(IPv4StringToNum(`events`.`payload`)), IPv6NumToString(toIPv6(`events`.`payload`)), isIPv4String(`events`.`payload`), isIPv6String(`events`.`payload`) FROM `events`"
+    );
+}
+
+#[test]
+fn renders_higher_order_array_and_map_functions() {
+    use self::events::dsl::*;
+
+    let array_query = events.select((
+        array_map(lambda("tag", "lower(tag)"), tags),
+        array_filter(lambda("tag", "tag != ''"), tags),
+        array_exists(lambda("tag", "tag = 'paid'"), tags),
+        array_all(lambda("tag", "notEmpty(tag)"), tags),
+        array_count(lambda("tag", "tag = 'paid'"), tags),
+    ));
+    let map_query = events.select((
+        map_filter(lambda2("k", "v", "k = 'country'"), attrs),
+        map_apply(lambda2("k", "v", "(k, upper(v))"), attrs),
+        map_from_arrays(map_keys(attrs), map_values(attrs)),
+    ));
+
+    assert_eq!(
+        to_sql(&array_query).unwrap(),
+        "SELECT arrayMap(tag -> lower(tag), `events`.`tags`), arrayFilter(tag -> tag != '', `events`.`tags`), arrayExists(tag -> tag = 'paid', `events`.`tags`), arrayAll(tag -> notEmpty(tag), `events`.`tags`), arrayCount(tag -> tag = 'paid', `events`.`tags`) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&map_query).unwrap(),
+        "SELECT mapFilter((k, v) -> k = 'country', `events`.`attrs`), mapApply((k, v) -> (k, upper(v)), `events`.`attrs`), mapFromArrays(mapKeys(`events`.`attrs`), mapValues(`events`.`attrs`)) FROM `events`"
     );
 }
 
@@ -682,6 +712,119 @@ fn renders_create_table_mergetree_ddl() {
     assert_eq!(
         to_sql(&ddl).unwrap(),
         "CREATE TABLE IF NOT EXISTS `analytics`.`events` (\n    `id` UInt64,\n    `tenant_id` LowCardinality(String),\n    `created_at` DateTime,\n    `success` Bool,\n    `latency_ms` Float64,\n    `tags` Array(String),\n    `attrs` Map(String, String),\n    `client_ip` IPv4,\n    `client_ip6` IPv6,\n    `latency_state` AggregateFunction(sum, Float64),\n    `ids_state` AggregateFunction(uniqExact, UInt64),\n    `payload` String CODEC(ZSTD(1)),\n    `created_date` Date ALIAS toDate(created_at)\n) ENGINE = ReplacingMergeTree PARTITION BY toDate(created_at) PRIMARY KEY (tenant_id, id) ORDER BY (tenant_id, id) SAMPLE BY id TTL created_at + INTERVAL 7 DAY SETTINGS index_granularity = 8192"
+    );
+}
+
+#[test]
+fn renders_table_engine_and_projection_ddl_depth() {
+    let rollup = create_table("analytics.rollups")
+        .column("tenant_id", DataType::String)
+        .column("bucket", DataType::Date)
+        .column("hits", DataType::UInt64)
+        .column("bytes", DataType::UInt64)
+        .projection(projection(
+            "by_tenant",
+            "SELECT tenant_id, sum(hits), sum(bytes) GROUP BY tenant_id",
+        ))
+        .engine(
+            summing_merge_tree_with(["hits", "bytes"])
+                .partition_by(["toYYYYMM(bucket)"])
+                .order_by(["tenant_id", "bucket"])
+                .setting("index_granularity", 2048_i64),
+        );
+    let aggregate = create_table("analytics.aggregate_states")
+        .column("tenant_id", DataType::String)
+        .column(
+            "hits",
+            DataType::aggregate_function("sum", [DataType::UInt64]),
+        )
+        .engine(aggregating_merge_tree().order_by(["tenant_id"]));
+    let collapsing = create_table("analytics.collapsing_events")
+        .column("id", DataType::UInt64)
+        .column("sign", DataType::Int8)
+        .engine(collapsing_merge_tree("sign").order_by(["id"]));
+    let versioned = create_table("analytics.versioned_events")
+        .column("id", DataType::UInt64)
+        .column("sign", DataType::Int8)
+        .column("version", DataType::UInt64)
+        .engine(versioned_collapsing_merge_tree("sign", "version").order_by(["id"]));
+    let distributed_table = create_table("analytics.events_all")
+        .column("id", DataType::UInt64)
+        .engine(
+            distributed("company_cluster", "analytics", "events_local")
+                .sharding_key("cityHash64(id)")
+                .policy_name("fast_distributed")
+                .setting("fsync_after_insert", false),
+        );
+    let buffer_table = create_table("analytics.events_buffer")
+        .column("id", DataType::UInt64)
+        .engine(
+            buffer(
+                "analytics",
+                "events_local",
+                1,
+                10,
+                100,
+                1_000,
+                1_000_000,
+                1_048_576,
+                104_857_600,
+            )
+            .flush_time(5)
+            .flush_rows(10_000)
+            .flush_bytes(10_485_760),
+        );
+    let null_table = create_table("analytics.discarded_events")
+        .column("id", DataType::UInt64)
+        .engine(TableEngine::null());
+    let add_projection = alter_table("analytics.rollups").add_projection(projection(
+        "by_bucket",
+        "SELECT bucket, sum(hits) GROUP BY bucket",
+    ));
+    let materialize_projection = alter_table("analytics.rollups")
+        .materialize_projection("by_bucket")
+        .setting("mutations_sync", 2_i64);
+    let drop_projection = alter_table("analytics.rollups").drop_projection("by_bucket");
+
+    assert_eq!(
+        to_sql(&rollup).unwrap(),
+        "CREATE TABLE `analytics`.`rollups` (\n    `tenant_id` String,\n    `bucket` Date,\n    `hits` UInt64,\n    `bytes` UInt64,\n    PROJECTION `by_tenant` (SELECT tenant_id, sum(hits), sum(bytes) GROUP BY tenant_id)\n) ENGINE = SummingMergeTree((hits, bytes)) PARTITION BY toYYYYMM(bucket) ORDER BY (tenant_id, bucket) SETTINGS index_granularity = 2048"
+    );
+    assert_eq!(
+        to_sql(&aggregate).unwrap(),
+        "CREATE TABLE `analytics`.`aggregate_states` (\n    `tenant_id` String,\n    `hits` AggregateFunction(sum, UInt64)\n) ENGINE = AggregatingMergeTree ORDER BY tenant_id"
+    );
+    assert_eq!(
+        to_sql(&collapsing).unwrap(),
+        "CREATE TABLE `analytics`.`collapsing_events` (\n    `id` UInt64,\n    `sign` Int8\n) ENGINE = CollapsingMergeTree(sign) ORDER BY id"
+    );
+    assert_eq!(
+        to_sql(&versioned).unwrap(),
+        "CREATE TABLE `analytics`.`versioned_events` (\n    `id` UInt64,\n    `sign` Int8,\n    `version` UInt64\n) ENGINE = VersionedCollapsingMergeTree(sign, version) ORDER BY id"
+    );
+    assert_eq!(
+        to_sql(&distributed_table).unwrap(),
+        "CREATE TABLE `analytics`.`events_all` (\n    `id` UInt64\n) ENGINE = Distributed(company_cluster, analytics, events_local, cityHash64(id), fast_distributed) SETTINGS fsync_after_insert = 0"
+    );
+    assert_eq!(
+        to_sql(&buffer_table).unwrap(),
+        "CREATE TABLE `analytics`.`events_buffer` (\n    `id` UInt64\n) ENGINE = Buffer(analytics, events_local, 1, 10, 100, 1000, 1000000, 1048576, 104857600, 5, 10000, 10485760)"
+    );
+    assert_eq!(
+        to_sql(&null_table).unwrap(),
+        "CREATE TABLE `analytics`.`discarded_events` (\n    `id` UInt64\n) ENGINE = Null"
+    );
+    assert_eq!(
+        to_sql(&add_projection).unwrap(),
+        "ALTER TABLE `analytics`.`rollups` ADD PROJECTION `by_bucket` (SELECT bucket, sum(hits) GROUP BY bucket)"
+    );
+    assert_eq!(
+        to_sql(&materialize_projection).unwrap(),
+        "ALTER TABLE `analytics`.`rollups` MATERIALIZE PROJECTION `by_bucket` SETTINGS mutations_sync = 2"
+    );
+    assert_eq!(
+        to_sql(&drop_projection).unwrap(),
+        "ALTER TABLE `analytics`.`rollups` DROP PROJECTION `by_bucket`"
     );
 }
 

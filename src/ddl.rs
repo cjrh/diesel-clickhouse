@@ -17,8 +17,14 @@ pub fn create_table(name: impl Into<String>) -> CreateTable {
         if_not_exists: false,
         columns: Vec::new(),
         indexes: Vec::new(),
+        projections: Vec::new(),
         engine: None,
     }
+}
+
+/// Build a ClickHouse table projection definition.
+pub fn projection(name: impl Into<String>, body: impl Into<String>) -> TableProjection {
+    TableProjection::new(name, body)
 }
 
 /// Build a ClickHouse `vector_similarity` skipping index.
@@ -52,19 +58,83 @@ pub fn alter_table(name: impl Into<String>) -> AlterTable {
 
 /// Start a `MergeTree` engine definition.
 pub fn merge_tree() -> MergeTree {
-    MergeTree::new(MergeTreeKind::MergeTree)
+    MergeTree::new(MergeTreeKind::Base)
 }
 
 /// Start a `ReplacingMergeTree` engine definition.
 pub fn replacing_merge_tree() -> MergeTree {
-    MergeTree::new(MergeTreeKind::ReplacingMergeTree { version: None })
+    MergeTree::new(MergeTreeKind::Replacing { version: None })
 }
 
 /// Start a `ReplacingMergeTree(version)` engine definition.
 pub fn replacing_merge_tree_with(version: impl Into<String>) -> MergeTree {
-    MergeTree::new(MergeTreeKind::ReplacingMergeTree {
+    MergeTree::new(MergeTreeKind::Replacing {
         version: Some(version.into()),
     })
+}
+
+/// Start a `SummingMergeTree` engine definition.
+pub fn summing_merge_tree() -> MergeTree {
+    MergeTree::new(MergeTreeKind::Summing { columns: None })
+}
+
+/// Start a `SummingMergeTree((columns...))` engine definition.
+pub fn summing_merge_tree_with<I, S>(columns: I) -> MergeTree
+where
+    I: IntoIterator<Item = S>,
+    S: Into<String>,
+{
+    MergeTree::new(MergeTreeKind::Summing {
+        columns: Some(columns.into_iter().map(Into::into).collect()),
+    })
+}
+
+/// Start an `AggregatingMergeTree` engine definition.
+pub fn aggregating_merge_tree() -> MergeTree {
+    MergeTree::new(MergeTreeKind::Aggregating)
+}
+
+/// Start a `CollapsingMergeTree(sign)` engine definition.
+pub fn collapsing_merge_tree(sign: impl Into<String>) -> MergeTree {
+    MergeTree::new(MergeTreeKind::Collapsing { sign: sign.into() })
+}
+
+/// Start a `VersionedCollapsingMergeTree(sign, version)` engine definition.
+pub fn versioned_collapsing_merge_tree(
+    sign: impl Into<String>,
+    version: impl Into<String>,
+) -> MergeTree {
+    MergeTree::new(MergeTreeKind::VersionedCollapsing {
+        sign: sign.into(),
+        version: version.into(),
+    })
+}
+
+/// Build a `Distributed(cluster, database, table)` engine definition.
+pub fn distributed(
+    cluster: impl Into<String>,
+    database: impl Into<String>,
+    table: impl Into<String>,
+) -> DistributedEngine {
+    DistributedEngine::new(cluster, database, table)
+}
+
+/// Build a `Buffer(...)` engine definition.
+#[allow(clippy::too_many_arguments)]
+pub fn buffer(
+    database: impl Into<String>,
+    table: impl Into<String>,
+    num_layers: u64,
+    min_time: u64,
+    max_time: u64,
+    min_rows: u64,
+    max_rows: u64,
+    min_bytes: u64,
+    max_bytes: u64,
+) -> BufferEngine {
+    BufferEngine::new(
+        database, table, num_layers, min_time, max_time, min_rows, max_rows, min_bytes, max_bytes,
+    )
 }
 
 /// `CREATE TABLE ...` statement.
@@ -74,6 +144,7 @@ pub struct CreateTable {
     if_not_exists: bool,
     columns: Vec<Column>,
     indexes: Vec<TableIndex>,
+    projections: Vec<TableProjection>,
     engine: Option<TableEngine>,
 }
 
@@ -126,6 +197,13 @@ enum AlterTableOperation {
     MaterializeIndex {
         name: String,
     },
+    AddProjection(TableProjection),
+    DropProjection {
+        name: String,
+    },
+    MaterializeProjection {
+        name: String,
+    },
     ModifyTtl {
         expr: String,
     },
@@ -153,6 +231,12 @@ impl CreateTable {
     /// Add a ClickHouse table index definition.
     pub fn index(mut self, index: TableIndex) -> Self {
         self.indexes.push(index);
+        self
+    }
+
+    /// Add a ClickHouse table projection definition.
+    pub fn projection(mut self, projection: TableProjection) -> Self {
+        self.projections.push(projection);
         self
     }
 
@@ -259,6 +343,24 @@ impl AlterTable {
         self
     }
 
+    /// Add `ADD PROJECTION ...`.
+    pub fn add_projection(mut self, projection: TableProjection) -> Self {
+        self.operation = Some(AlterTableOperation::AddProjection(projection));
+        self
+    }
+
+    /// Add `DROP PROJECTION name`.
+    pub fn drop_projection(mut self, name: impl Into<String>) -> Self {
+        self.operation = Some(AlterTableOperation::DropProjection { name: name.into() });
+        self
+    }
+
+    /// Add `MATERIALIZE PROJECTION name`.
+    pub fn materialize_projection(mut self, name: impl Into<String>) -> Self {
+        self.operation = Some(AlterTableOperation::MaterializeProjection { name: name.into() });
+        self
+    }
+
     /// Append `SETTINGS name = value` after the ALTER operation.
     pub fn setting(
         mut self,
@@ -323,6 +425,26 @@ enum ColumnDefault {
     Default(String),
     Materialized(String),
     Alias(String),
+}
+
+/// One `PROJECTION name (SELECT ...)` definition in `CREATE TABLE` or `ALTER TABLE`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TableProjection {
+    name: String,
+    body: String,
+}
+
+impl TableProjection {
+    /// Create a projection from its name and the body inside the parentheses.
+    ///
+    /// Pass the body exactly as ClickHouse expects it, typically a `SELECT ...`
+    /// fragment such as `"SELECT tenant_id, count() GROUP BY tenant_id"`.
+    pub fn new(name: impl Into<String>, body: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            body: body.into(),
+        }
+    }
 }
 
 /// One `INDEX name expr TYPE ... [GRANULARITY n]` definition in `CREATE TABLE`.
@@ -619,7 +741,10 @@ impl DataType {
 #[derive(Debug, Clone)]
 pub enum TableEngine {
     Memory,
+    Null,
     MergeTree(MergeTree),
+    Distributed(DistributedEngine),
+    Buffer(BufferEngine),
     /// Caller-provided engine expression, e.g. `"Distributed(cluster, db, table)"`.
     Custom(String),
 }
@@ -627,6 +752,10 @@ pub enum TableEngine {
 impl TableEngine {
     pub fn memory() -> Self {
         Self::Memory
+    }
+
+    pub fn null() -> Self {
+        Self::Null
     }
 
     pub fn custom(value: impl Into<String>) -> Self {
@@ -637,6 +766,136 @@ impl TableEngine {
 impl From<MergeTree> for TableEngine {
     fn from(value: MergeTree) -> Self {
         Self::MergeTree(value)
+    }
+}
+
+impl From<DistributedEngine> for TableEngine {
+    fn from(value: DistributedEngine) -> Self {
+        Self::Distributed(value)
+    }
+}
+
+impl From<BufferEngine> for TableEngine {
+    fn from(value: BufferEngine) -> Self {
+        Self::Buffer(value)
+    }
+}
+
+/// `Distributed(cluster, database, table[, sharding_key[, policy_name]])` engine definition.
+#[derive(Debug, Clone, PartialEq)]
+pub struct DistributedEngine {
+    cluster: String,
+    database: String,
+    table: String,
+    sharding_key: Option<String>,
+    policy_name: Option<String>,
+    settings: Vec<EngineSetting>,
+}
+
+impl DistributedEngine {
+    fn new(
+        cluster: impl Into<String>,
+        database: impl Into<String>,
+        table: impl Into<String>,
+    ) -> Self {
+        Self {
+            cluster: cluster.into(),
+            database: database.into(),
+            table: table.into(),
+            sharding_key: None,
+            policy_name: None,
+            settings: Vec::new(),
+        }
+    }
+
+    /// Add the optional sharding-key expression.
+    pub fn sharding_key(mut self, expr: impl Into<String>) -> Self {
+        self.sharding_key = Some(expr.into());
+        self
+    }
+
+    /// Add the optional storage policy name.
+    pub fn policy_name(mut self, name: impl Into<String>) -> Self {
+        self.policy_name = Some(name.into());
+        self
+    }
+
+    /// Add one Distributed engine setting.
+    pub fn setting(
+        mut self,
+        name: impl Into<String>,
+        value: impl Into<EngineSettingValue>,
+    ) -> Self {
+        self.settings.push(EngineSetting {
+            name: name.into(),
+            value: value.into(),
+        });
+        self
+    }
+}
+
+/// `Buffer(database, table, ...)` engine definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BufferEngine {
+    database: String,
+    table: String,
+    num_layers: u64,
+    min_time: u64,
+    max_time: u64,
+    min_rows: u64,
+    max_rows: u64,
+    min_bytes: u64,
+    max_bytes: u64,
+    flush_time: Option<u64>,
+    flush_rows: Option<u64>,
+    flush_bytes: Option<u64>,
+}
+
+impl BufferEngine {
+    #[allow(clippy::too_many_arguments)]
+    fn new(
+        database: impl Into<String>,
+        table: impl Into<String>,
+        num_layers: u64,
+        min_time: u64,
+        max_time: u64,
+        min_rows: u64,
+        max_rows: u64,
+        min_bytes: u64,
+        max_bytes: u64,
+    ) -> Self {
+        Self {
+            database: database.into(),
+            table: table.into(),
+            num_layers,
+            min_time,
+            max_time,
+            min_rows,
+            max_rows,
+            min_bytes,
+            max_bytes,
+            flush_time: None,
+            flush_rows: None,
+            flush_bytes: None,
+        }
+    }
+
+    /// Add the optional `flush_time` threshold.
+    pub fn flush_time(mut self, value: u64) -> Self {
+        self.flush_time = Some(value);
+        self
+    }
+
+    /// Add the optional `flush_rows` threshold.
+    pub fn flush_rows(mut self, value: u64) -> Self {
+        self.flush_rows = Some(value);
+        self
+    }
+
+    /// Add the optional `flush_bytes` threshold.
+    pub fn flush_bytes(mut self, value: u64) -> Self {
+        self.flush_bytes = Some(value);
+        self
     }
 }
 
@@ -654,8 +913,12 @@ pub struct MergeTree {
 
 #[derive(Debug, Clone)]
 enum MergeTreeKind {
-    MergeTree,
-    ReplacingMergeTree { version: Option<String> },
+    Base,
+    Replacing { version: Option<String> },
+    Summing { columns: Option<Vec<String>> },
+    Aggregating,
+    Collapsing { sign: String },
+    VersionedCollapsing { sign: String, version: String },
 }
 
 impl MergeTree {
@@ -833,6 +1096,10 @@ impl QueryFragment<ClickHouse> for CreateTable {
             out.push_sql(",\n    ");
             index.walk_ast(out.reborrow())?;
         }
+        for projection in &self.projections {
+            out.push_sql(",\n    ");
+            projection.walk_ast(out.reborrow())?;
+        }
         out.push_sql("\n)");
         if let Some(engine) = &self.engine {
             out.push_sql(" ENGINE = ");
@@ -950,6 +1217,20 @@ impl QueryFragment<ClickHouse> for AlterTableOperation {
                 out.push_sql("MODIFY TTL ");
                 out.push_sql(expr);
             }
+            Self::AddProjection(projection) => {
+                out.push_sql("ADD ");
+                projection.walk_ast(out.reborrow())?;
+            }
+            Self::DropProjection { name } => {
+                out.push_sql("DROP PROJECTION ");
+                validate_bare_identifier(name, "projection")?;
+                out.push_identifier(name)?;
+            }
+            Self::MaterializeProjection { name } => {
+                out.push_sql("MATERIALIZE PROJECTION ");
+                validate_bare_identifier(name, "projection")?;
+                out.push_identifier(name)?;
+            }
         }
         Ok(())
     }
@@ -981,6 +1262,23 @@ impl QueryFragment<ClickHouse> for Column {
             out.push_sql(codec);
             out.push_sql(")");
         }
+        Ok(())
+    }
+}
+
+impl QueryFragment<ClickHouse> for TableProjection {
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        if self.body.trim().is_empty() {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse projection body must not be empty".into(),
+            ));
+        }
+        out.push_sql("PROJECTION ");
+        validate_bare_identifier(&self.name, "projection")?;
+        out.push_identifier(&self.name)?;
+        out.push_sql(" (");
+        out.push_sql(&self.body);
+        out.push_sql(")");
         Ok(())
     }
 }
@@ -1293,9 +1591,98 @@ impl QueryFragment<ClickHouse> for TableEngine {
     fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
         match self {
             Self::Memory => out.push_sql("Memory"),
+            Self::Null => out.push_sql("Null"),
             Self::MergeTree(engine) => engine.walk_ast(out.reborrow())?,
+            Self::Distributed(engine) => engine.walk_ast(out.reborrow())?,
+            Self::Buffer(engine) => engine.walk_ast(out.reborrow())?,
             Self::Custom(engine) => out.push_sql(engine),
         }
+        Ok(())
+    }
+}
+
+impl QueryFragment<ClickHouse> for DistributedEngine {
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        validate_non_empty(&self.cluster, "Distributed cluster")?;
+        validate_non_empty(&self.database, "Distributed database")?;
+        validate_non_empty(&self.table, "Distributed table")?;
+        if self.policy_name.is_some() && self.sharding_key.is_none() {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse Distributed policy_name requires a sharding_key argument".into(),
+            ));
+        }
+
+        out.push_sql("Distributed(");
+        out.push_sql(&self.cluster);
+        out.push_sql(", ");
+        out.push_sql(&self.database);
+        out.push_sql(", ");
+        out.push_sql(&self.table);
+        if let Some(sharding_key) = &self.sharding_key {
+            validate_non_empty(sharding_key, "Distributed sharding key")?;
+            out.push_sql(", ");
+            out.push_sql(sharding_key);
+        }
+        if let Some(policy_name) = &self.policy_name {
+            validate_non_empty(policy_name, "Distributed policy name")?;
+            out.push_sql(", ");
+            out.push_sql(policy_name);
+        }
+        out.push_sql(")");
+        push_engine_settings(&mut out, &self.settings)?;
+        Ok(())
+    }
+}
+
+impl QueryFragment<ClickHouse> for BufferEngine {
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        validate_non_empty(&self.database, "Buffer database")?;
+        validate_non_empty(&self.table, "Buffer table")?;
+        if self.num_layers == 0 {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse Buffer num_layers must be greater than 0".into(),
+            ));
+        }
+
+        out.push_sql("Buffer(");
+        out.push_sql(&self.database);
+        out.push_sql(", ");
+        out.push_sql(&self.table);
+        for value in [
+            self.num_layers,
+            self.min_time,
+            self.max_time,
+            self.min_rows,
+            self.max_rows,
+            self.min_bytes,
+            self.max_bytes,
+        ] {
+            out.push_sql(", ");
+            out.push_sql(&value.to_string());
+        }
+        if let Some(flush_time) = self.flush_time {
+            out.push_sql(", ");
+            out.push_sql(&flush_time.to_string());
+        }
+        if let Some(flush_rows) = self.flush_rows {
+            if self.flush_time.is_none() {
+                return Err(Error::QueryBuilderError(
+                    "ClickHouse Buffer flush_rows requires flush_time".into(),
+                ));
+            }
+            out.push_sql(", ");
+            out.push_sql(&flush_rows.to_string());
+        }
+        if let Some(flush_bytes) = self.flush_bytes {
+            if self.flush_time.is_none() || self.flush_rows.is_none() {
+                return Err(Error::QueryBuilderError(
+                    "ClickHouse Buffer flush_bytes requires flush_time and flush_rows".into(),
+                ));
+            }
+            out.push_sql(", ");
+            out.push_sql(&flush_bytes.to_string());
+        }
+        out.push_sql(")");
         Ok(())
     }
 }
@@ -1303,14 +1690,37 @@ impl QueryFragment<ClickHouse> for TableEngine {
 impl QueryFragment<ClickHouse> for MergeTree {
     fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
         match &self.kind {
-            MergeTreeKind::MergeTree => out.push_sql("MergeTree"),
-            MergeTreeKind::ReplacingMergeTree { version: None } => {
-                out.push_sql("ReplacingMergeTree")
-            }
-            MergeTreeKind::ReplacingMergeTree {
+            MergeTreeKind::Base => out.push_sql("MergeTree"),
+            MergeTreeKind::Replacing { version: None } => out.push_sql("ReplacingMergeTree"),
+            MergeTreeKind::Replacing {
                 version: Some(version),
             } => {
+                validate_bare_identifier(version, "ReplacingMergeTree version column")?;
                 out.push_sql("ReplacingMergeTree(");
+                out.push_sql(version);
+                out.push_sql(")");
+            }
+            MergeTreeKind::Summing { columns: None } => out.push_sql("SummingMergeTree"),
+            MergeTreeKind::Summing {
+                columns: Some(columns),
+            } => {
+                out.push_sql("SummingMergeTree(");
+                push_engine_identifier_tuple(&mut out, columns)?;
+                out.push_sql(")");
+            }
+            MergeTreeKind::Aggregating => out.push_sql("AggregatingMergeTree"),
+            MergeTreeKind::Collapsing { sign } => {
+                validate_bare_identifier(sign, "CollapsingMergeTree sign column")?;
+                out.push_sql("CollapsingMergeTree(");
+                out.push_sql(sign);
+                out.push_sql(")");
+            }
+            MergeTreeKind::VersionedCollapsing { sign, version } => {
+                validate_bare_identifier(sign, "VersionedCollapsingMergeTree sign column")?;
+                validate_bare_identifier(version, "VersionedCollapsingMergeTree version column")?;
+                out.push_sql("VersionedCollapsingMergeTree(");
+                out.push_sql(sign);
+                out.push_sql(", ");
                 out.push_sql(version);
                 out.push_sql(")");
             }
@@ -1326,20 +1736,50 @@ impl QueryFragment<ClickHouse> for MergeTree {
             out.push_sql(" TTL ");
             out.push_sql(ttl);
         }
-        if !self.settings.is_empty() {
-            out.push_sql(" SETTINGS ");
-            for (idx, setting) in self.settings.iter().enumerate() {
-                if idx > 0 {
-                    out.push_sql(", ");
-                }
-                validate_bare_identifier(&setting.name, "setting")?;
-                out.push_sql(&setting.name);
-                out.push_sql(" = ");
-                push_setting_value(&mut out, &setting.value)?;
-            }
-        }
+        push_engine_settings(&mut out, &self.settings)?;
         Ok(())
     }
+}
+
+fn push_engine_identifier_tuple(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    identifiers: &[String],
+) -> QueryResult<()> {
+    if identifiers.is_empty() {
+        return Err(Error::QueryBuilderError(
+            "ClickHouse engine column tuple requires at least one column".into(),
+        ));
+    }
+    out.push_sql("(");
+    for (idx, identifier) in identifiers.iter().enumerate() {
+        if idx > 0 {
+            out.push_sql(", ");
+        }
+        validate_bare_identifier(identifier, "engine column")?;
+        out.push_sql(identifier);
+    }
+    out.push_sql(")");
+    Ok(())
+}
+
+fn push_engine_settings(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    settings: &[EngineSetting],
+) -> QueryResult<()> {
+    if settings.is_empty() {
+        return Ok(());
+    }
+    out.push_sql(" SETTINGS ");
+    for (idx, setting) in settings.iter().enumerate() {
+        if idx > 0 {
+            out.push_sql(", ");
+        }
+        validate_bare_identifier(&setting.name, "setting")?;
+        out.push_sql(&setting.name);
+        out.push_sql(" = ");
+        push_setting_value(out, &setting.value)?;
+    }
+    Ok(())
 }
 
 fn push_optional_expr_list(
@@ -1420,6 +1860,15 @@ fn push_qualified_identifier(
             out.push_sql(".");
         }
         out.push_identifier(part)?;
+    }
+    Ok(())
+}
+
+fn validate_non_empty(value: &str, kind: &str) -> QueryResult<()> {
+    if value.trim().is_empty() {
+        return Err(Error::QueryBuilderError(
+            format!("empty ClickHouse {kind}").into(),
+        ));
     }
     Ok(())
 }
