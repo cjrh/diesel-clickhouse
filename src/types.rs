@@ -92,6 +92,18 @@ pub struct IPv4;
 #[derive(Debug, Clone, Copy, Default, QueryId, SqlType)]
 pub struct IPv6;
 
+/// ClickHouse `Point` geographic type.
+#[derive(Debug, Clone, Copy, Default, QueryId, SqlType)]
+pub struct Point;
+
+/// ClickHouse `Ring` geographic type.
+#[derive(Debug, Clone, Copy, Default, QueryId, SqlType)]
+pub struct Ring;
+
+/// ClickHouse `Dynamic` semi-structured type.
+#[derive(Debug, Clone, Copy, Default, QueryId, SqlType)]
+pub struct Dynamic;
+
 /// ClickHouse `Nothing`.
 #[derive(Debug, Clone, Copy, Default, QueryId, SqlType)]
 pub struct Nothing;
@@ -115,6 +127,10 @@ pub struct Tuple<ST>(PhantomData<ST>);
 /// ClickHouse `Nested(...)` stored in a single column family.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct Nested<ST>(PhantomData<ST>);
+
+/// ClickHouse `Variant(...)` union stored in a single column.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Variant<ST>(PhantomData<ST>);
 
 /// ClickHouse `AggregateFunction(...)` state whose finalized value has type `ST`.
 #[derive(Debug, Clone, Copy, Default)]
@@ -232,6 +248,23 @@ where
     const HAS_STATIC_QUERY_ID: bool = ST::HAS_STATIC_QUERY_ID;
 }
 
+impl<ST> SqlType for Variant<ST>
+where
+    ST: SqlType,
+{
+    type IsNull = is_nullable::NotNull;
+}
+
+impl<ST> SingleValue for Variant<ST> where ST: SqlType {}
+
+impl<ST> QueryId for Variant<ST>
+where
+    ST: QueryId,
+{
+    type QueryId = Variant<ST::QueryId>;
+    const HAS_STATIC_QUERY_ID: bool = ST::HAS_STATIC_QUERY_ID;
+}
+
 impl<ST> SqlType for AggregateFunction<ST>
 where
     ST: SqlType,
@@ -276,6 +309,9 @@ clickhouse_type!(Uuid => "UUID");
 clickhouse_type!(Json => "JSON");
 clickhouse_type!(IPv4 => "IPv4");
 clickhouse_type!(IPv6 => "IPv6");
+clickhouse_type!(Point => "Point");
+clickhouse_type!(Ring => "Ring");
+clickhouse_type!(Dynamic => "Dynamic");
 clickhouse_type!(Nothing => "Nothing");
 
 impl<ST> HasSqlType<Array<ST>> for ClickHouse
@@ -341,6 +377,16 @@ where
 {
     fn metadata(_: &mut Self::MetadataLookup) -> Self::TypeMetadata {
         ClickHouseTypeMetadata::new("Nested")
+    }
+}
+
+impl<ST> HasSqlType<Variant<ST>> for ClickHouse
+where
+    ST: SqlType,
+    ClickHouse: HasSqlType<ST>,
+{
+    fn metadata(_: &mut Self::MetadataLookup) -> Self::TypeMetadata {
+        ClickHouseTypeMetadata::new("Variant")
     }
 }
 

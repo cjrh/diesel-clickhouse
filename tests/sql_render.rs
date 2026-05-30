@@ -1,35 +1,41 @@
 use diesel::prelude::*;
 use diesel_clickhouse::{
-    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField,
-    OutfileCompression, OverDsl, Setting, TableEngine, TableIndex, VectorDistanceFunction,
-    VectorQuantization, WindowFrameBound, abs, accurate_cast, accurate_cast_or_default,
-    accurate_cast_or_null, aggregating_merge_tree, alter_table, array_all, array_count,
-    array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode,
-    base64_encode, buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat, corr,
-    cosine_distance, count_if, count_merge, count_merge_state, count_state, covar_pop,
+    ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
+    Format, NestedField, OutfileCompression, OverDsl, Setting, TableEngine, TableIndex,
+    VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
+    accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree,
+    alter_table, analysis_of_variance, approx_top_sum, approx_top_sum_with_reserved, array_all,
+    array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state,
+    base64_decode, base64_encode, buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat,
+    corr, cosine_distance, count_if, count_merge, count_merge_state, count_state, covar_pop,
     covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table, cube,
     cut_query_string, date_diff, dense_rank, distributed, domain, domain_without_www,
     farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
     greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
-    histogram, if_, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
-    is_ipv6_string, is_valid_json, json_exists, json_extract_int, json_extract_int_ci,
-    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
-    json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
-    json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
-    length, linf_distance, linf_norm, lower, map_apply, map_contains, map_filter, map_from_arrays,
-    map_keys, map_values, max_merge, max_state, min_merge, min_state, mutation_assignment,
-    partition_by, partition_expr, partition_id, position, prewhere, projection, quantile,
-    quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing, rank,
-    regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
+    histogram, if_, ilike, ilike_escape, ipv4_num_to_string, ipv4_string_to_num,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, json_exists,
+    json_extract_int, json_extract_int_ci, json_extract_int_ci_path, json_extract_int_path,
+    json_extract_raw_ci, json_extract_raw_path, json_extract_string_ci, json_extract_string_path,
+    json_has, json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm,
+    lag_in_frame, lambda, lambda2, least, length, like, like_escape, linf_distance, linf_norm,
+    lower, mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
+    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
+    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
+    multi_match_any_index, mutation_assignment, not_ilike, not_ilike_escape, not_like,
+    not_like_escape, partition_by, partition_expr, partition_id, position, prewhere, projection,
+    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
+    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
     sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
-    sip_hash64, substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool,
-    to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
+    sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable, substring,
+    sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool, to_date_time,
+    to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
     to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_start_of_hour, to_string, to_uint32,
     to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, top_k, top_level_domain,
     try_base64_decode, unhex, uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32,
-    vector_f32_binary, vector_f32_hex, vector_f32_le_hex, vector_f64, vector_f64_hex,
-    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
+    var_samp, var_samp_stable, vector_f32, vector_f32_binary, vector_f32_hex, vector_f32_le_hex,
+    vector_f64, vector_f64_hex, vector_similarity_index, versioned_collapsing_merge_tree,
+    with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -190,6 +196,49 @@ fn renders_string_numeric_and_conversion_functions() {
 }
 
 #[test]
+fn renders_like_regex_and_multi_match_helpers() {
+    use self::events::dsl::*;
+
+    let pattern_array = || {
+        diesel::dsl::sql::<diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>>(
+            "['^ac', 'beta$']",
+        )
+    };
+    let like_query = events.select((
+        tenant_id.like("ac%"),
+        tenant_id.not_like("%z"),
+        tenant_id.ilike("%AC%"),
+        tenant_id.not_ilike("%BETA%"),
+        like(tenant_id, "a%"),
+        like_escape(tenant_id, "a!_%", "!"),
+        not_like(tenant_id, "%z"),
+        not_like_escape(tenant_id, "z!_%", "!"),
+        ilike(tenant_id, "%AC%"),
+        ilike_escape(tenant_id, "A!_%", "!"),
+        not_ilike(tenant_id, "%BETA%"),
+        not_ilike_escape(tenant_id, "B!_%", "!"),
+    ));
+    let match_query = events.select((
+        regexp_match(tenant_id, "^ac"),
+        multi_match_any(tenant_id, pattern_array()),
+        multi_match_any_index(tenant_id, pattern_array()),
+        multi_match_all_indices(tenant_id, pattern_array()),
+        multi_fuzzy_match_any(tenant_id, 1_i32, pattern_array()),
+        multi_fuzzy_match_any_index(tenant_id, 1_i32, pattern_array()),
+        multi_fuzzy_match_all_indices(tenant_id, 1_i32, pattern_array()),
+    ));
+
+    assert_eq!(
+        to_sql(&like_query).unwrap(),
+        "SELECT (`events`.`tenant_id` LIKE ?), (`events`.`tenant_id` NOT LIKE ?), `events`.`tenant_id` ILIKE ?, `events`.`tenant_id` NOT ILIKE ?, like(`events`.`tenant_id`, ?), like(`events`.`tenant_id`, ?, ?), notLike(`events`.`tenant_id`, ?), notLike(`events`.`tenant_id`, ?, ?), ilike(`events`.`tenant_id`, ?), ilike(`events`.`tenant_id`, ?, ?), notILike(`events`.`tenant_id`, ?), notILike(`events`.`tenant_id`, ?, ?) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&match_query).unwrap(),
+        "SELECT match(`events`.`tenant_id`, ?), multiMatchAny(`events`.`tenant_id`, ['^ac', 'beta$']), multiMatchAnyIndex(`events`.`tenant_id`, ['^ac', 'beta$']), multiMatchAllIndices(`events`.`tenant_id`, ['^ac', 'beta$']), multiFuzzyMatchAny(`events`.`tenant_id`, ?, ['^ac', 'beta$']), multiFuzzyMatchAnyIndex(`events`.`tenant_id`, ?, ['^ac', 'beta$']), multiFuzzyMatchAllIndices(`events`.`tenant_id`, ?, ['^ac', 'beta$']) FROM `events`"
+    );
+}
+
+#[test]
 fn renders_cast_and_json_variant_helpers() {
     use self::events::dsl::*;
 
@@ -346,11 +395,29 @@ fn renders_statistical_aggregate_functions() {
         covar_samp(latency_ms, id),
         covar_pop_stable(latency_ms, id),
         covar_samp_stable(latency_ms, id),
+        stddev_pop(latency_ms),
+        stddev_samp(latency_ms),
+        stddev_pop_stable(latency_ms),
+        stddev_samp_stable(latency_ms),
+        var_pop(latency_ms),
+        var_samp(latency_ms),
+        var_pop_stable(latency_ms),
+        var_samp_stable(latency_ms),
+    ));
+    let test_query = events.select((
+        analysis_of_variance(latency_ms, success),
+        mann_whitney_u_test(latency_ms, success),
+        approx_top_sum(3, tenant_id, id),
+        approx_top_sum_with_reserved(3, 16, tenant_id, id),
     ));
 
     assert_eq!(
         to_sql(&query).unwrap(),
-        "SELECT corr(`events`.`latency_ms`, `events`.`id`), covarPop(`events`.`latency_ms`, `events`.`id`), covarSamp(`events`.`latency_ms`, `events`.`id`), covarPopStable(`events`.`latency_ms`, `events`.`id`), covarSampStable(`events`.`latency_ms`, `events`.`id`) FROM `events`"
+        "SELECT corr(`events`.`latency_ms`, `events`.`id`), covarPop(`events`.`latency_ms`, `events`.`id`), covarSamp(`events`.`latency_ms`, `events`.`id`), covarPopStable(`events`.`latency_ms`, `events`.`id`), covarSampStable(`events`.`latency_ms`, `events`.`id`), stddevPop(`events`.`latency_ms`), stddevSamp(`events`.`latency_ms`), stddevPopStable(`events`.`latency_ms`), stddevSampStable(`events`.`latency_ms`), varPop(`events`.`latency_ms`), varSamp(`events`.`latency_ms`), varPopStable(`events`.`latency_ms`), varSampStable(`events`.`latency_ms`) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&test_query).unwrap(),
+        "SELECT analysisOfVariance(`events`.`latency_ms`, `events`.`success`), mannWhitneyUTest(`events`.`latency_ms`, `events`.`success`), approx_top_sum(3)(`events`.`tenant_id`, `events`.`id`), approx_top_sum(3, 16)(`events`.`tenant_id`, `events`.`id`) FROM `events`"
     );
 }
 
@@ -478,6 +545,24 @@ fn renders_aggregate_state_and_merge_combinators() {
             diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
         >("event_count")),
     ));
+    let generic_query = events.group_by(tenant_id).select((
+        aggregate::<diesel::sql_types::Double>("avg")
+            .arg(latency_ms)
+            .or_null()
+            .if_(success),
+        aggregate::<diesel::sql_types::Double>("sum")
+            .arg(latency_ms)
+            .if_(success),
+        aggregate::<diesel::sql_types::BigInt>("count")
+            .no_args()
+            .if_(success),
+        aggregate::<diesel::sql_types::Double>("avg")
+            .arg(latency_ms)
+            .state(),
+        aggregate::<diesel::sql_types::BigInt>("uniq")
+            .arg(tenant_id)
+            .distinct(),
+    ));
 
     assert_eq!(
         to_sql(&state_query).unwrap(),
@@ -490,6 +575,10 @@ fn renders_aggregate_state_and_merge_combinators() {
     assert_eq!(
         to_sql(&merge_state_query).unwrap(),
         "SELECT sumMergeState(latency_sum), avgMergeState(latency_avg), countMergeState(event_count)"
+    );
+    assert_eq!(
+        to_sql(&generic_query).unwrap(),
+        "SELECT avgOrNullIf(`events`.`latency_ms`, `events`.`success`), sumIf(`events`.`latency_ms`, `events`.`success`), countIf(`events`.`success`), avgState(`events`.`latency_ms`), uniqDistinct(`events`.`tenant_id`) FROM `events` GROUP BY `events`.`tenant_id`"
     );
 }
 
@@ -760,6 +849,17 @@ fn renders_extended_clickhouse_data_types() {
             DataType::enum8([("draft", 1), ("published", 2), ("archived", 3)]),
         )
         .column("kind", DataType::enum16([("organic", 100), ("paid", 200)]))
+        .column("location", DataType::Point)
+        .column("boundary", DataType::Ring)
+        .column("flex", DataType::dynamic_with_max_types(4))
+        .column(
+            "variant_value",
+            DataType::variant([
+                DataType::UInt64,
+                DataType::String,
+                DataType::array(DataType::UInt64),
+            ]),
+        )
         .column(
             "dimensions",
             DataType::tuple([DataType::String, DataType::UInt64, DataType::Float64]),
@@ -775,7 +875,7 @@ fn renders_extended_clickhouse_data_types() {
 
     assert_eq!(
         to_sql(&ddl).unwrap(),
-        "CREATE TABLE `analytics`.`type_showcase` (\n    `big_signed` Int128,\n    `huge_signed` Int256,\n    `big_unsigned` UInt128,\n    `huge_unsigned` UInt256,\n    `compact_float` BFloat16,\n    `amount32` Decimal32(2),\n    `amount64` Decimal64(4),\n    `amount128` Decimal128(8),\n    `amount256` Decimal256(12),\n    `amount` Decimal(18, 6),\n    `status` Enum8('draft' = 1, 'published' = 2, 'archived' = 3),\n    `kind` Enum16('organic' = 100, 'paid' = 200),\n    `dimensions` Tuple(String, UInt64, Float64),\n    `attributes` Nested(`key` String, `value` String)\n) ENGINE = Memory"
+        "CREATE TABLE `analytics`.`type_showcase` (\n    `big_signed` Int128,\n    `huge_signed` Int256,\n    `big_unsigned` UInt128,\n    `huge_unsigned` UInt256,\n    `compact_float` BFloat16,\n    `amount32` Decimal32(2),\n    `amount64` Decimal64(4),\n    `amount128` Decimal128(8),\n    `amount256` Decimal256(12),\n    `amount` Decimal(18, 6),\n    `status` Enum8('draft' = 1, 'published' = 2, 'archived' = 3),\n    `kind` Enum16('organic' = 100, 'paid' = 200),\n    `location` Point,\n    `boundary` Ring,\n    `flex` Dynamic(max_types=4),\n    `variant_value` Variant(UInt64, String, Array(UInt64)),\n    `dimensions` Tuple(String, UInt64, Float64),\n    `attributes` Nested(`key` String, `value` String)\n) ENGINE = Memory"
     );
 }
 

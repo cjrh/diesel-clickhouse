@@ -911,6 +911,11 @@ pub enum DataType {
     Json,
     IPv4,
     IPv6,
+    Point,
+    Ring,
+    Dynamic {
+        max_types: Option<u64>,
+    },
     Enum8(Vec<(String, i8)>),
     Enum16(Vec<(String, i16)>),
     Array(Box<DataType>),
@@ -919,6 +924,7 @@ pub enum DataType {
     Nullable(Box<DataType>),
     Tuple(Vec<DataType>),
     Nested(Vec<NestedField>),
+    Variant(Vec<DataType>),
     AggregateFunction {
         function: String,
         arguments: Vec<DataType>,
@@ -946,6 +952,16 @@ impl DataType {
 
     pub fn decimal(precision: u8, scale: u8) -> Self {
         Self::Decimal { precision, scale }
+    }
+
+    pub fn dynamic() -> Self {
+        Self::Dynamic { max_types: None }
+    }
+
+    pub fn dynamic_with_max_types(max_types: u64) -> Self {
+        Self::Dynamic {
+            max_types: Some(max_types),
+        }
     }
 
     pub fn enum8<I, S>(variants: I) -> Self
@@ -1002,6 +1018,13 @@ impl DataType {
         I: IntoIterator<Item = NestedField>,
     {
         Self::Nested(fields.into_iter().collect())
+    }
+
+    pub fn variant<I>(types: I) -> Self
+    where
+        I: IntoIterator<Item = DataType>,
+    {
+        Self::Variant(types.into_iter().collect())
     }
 
     pub fn aggregate_function<I>(function: impl Into<String>, arguments: I) -> Self
@@ -1856,6 +1879,9 @@ impl QueryFragment<ClickHouse> for DataType {
             Self::Json => out.push_sql("JSON"),
             Self::IPv4 => out.push_sql("IPv4"),
             Self::IPv6 => out.push_sql("IPv6"),
+            Self::Point => out.push_sql("Point"),
+            Self::Ring => out.push_sql("Ring"),
+            Self::Dynamic { max_types } => push_dynamic_type(&mut out, *max_types)?,
             Self::Enum8(variants) => push_enum_variants(&mut out, "Enum8", variants)?,
             Self::Enum16(variants) => push_enum_variants(&mut out, "Enum16", variants)?,
             Self::Array(inner) => {
@@ -1882,6 +1908,7 @@ impl QueryFragment<ClickHouse> for DataType {
             }
             Self::Tuple(types) => push_tuple_type(&mut out, types)?,
             Self::Nested(fields) => push_nested_type(&mut out, fields)?,
+            Self::Variant(types) => push_variant_type(&mut out, types)?,
             Self::AggregateFunction {
                 function,
                 arguments,
@@ -1944,6 +1971,24 @@ fn push_decimal(
     Ok(())
 }
 
+fn push_dynamic_type(
+    out: &mut AstPass<'_, '_, ClickHouse>,
+    max_types: Option<u64>,
+) -> QueryResult<()> {
+    out.push_sql("Dynamic");
+    if let Some(max_types) = max_types {
+        if max_types == 0 {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse Dynamic max_types must be greater than 0".into(),
+            ));
+        }
+        out.push_sql("(max_types=");
+        out.push_sql(&max_types.to_string());
+        out.push_sql(")");
+    }
+    Ok(())
+}
+
 fn push_enum_variants<T>(
     out: &mut AstPass<'_, '_, ClickHouse>,
     family: &'static str,
@@ -1981,6 +2026,26 @@ fn push_tuple_type<'b>(
         ));
     }
     out.push_sql("Tuple(");
+    for (idx, data_type) in types.iter().enumerate() {
+        if idx > 0 {
+            out.push_sql(", ");
+        }
+        data_type.walk_ast(out.reborrow())?;
+    }
+    out.push_sql(")");
+    Ok(())
+}
+
+fn push_variant_type<'b>(
+    out: &mut AstPass<'_, 'b, ClickHouse>,
+    types: &'b [DataType],
+) -> QueryResult<()> {
+    if types.is_empty() {
+        return Err(Error::QueryBuilderError(
+            "ClickHouse Variant requires at least one nested type".into(),
+        ));
+    }
+    out.push_sql("Variant(");
     for (idx, data_type) in types.iter().enumerate() {
         if idx > 0 {
             out.push_sql(", ");

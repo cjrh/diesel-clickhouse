@@ -39,7 +39,7 @@ Legend:
 | ✅ 🧪 | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256`; DDL `DataType::{UInt128, UInt256, Int128, Int256}` |
 | ✅ 🧪 | Decimal families | `Decimal32<S>`, `Decimal64<S>`, `Decimal128<S>`, `Decimal256<S>`; DDL `DataType::decimal64(4)` |
 | ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>`, `Nested<...>`, `Enum8`, `Enum16`; DDL `DataType::tuple(...)`, `DataType::nested(...)`, `DataType::enum8(...)` |
-| 🚧 | Network / Geo / semi-structured types | `IPv4`, `IPv6` implemented; `Point`, `Ring`, `Dynamic`, `Variant` planned |
+| ✅ 🧪 | Network / Geo / semi-structured types | `IPv4`, `IPv6`, `Point`, `Ring`, `Dynamic`, `Variant`; DDL `DataType::{Point, Ring}`, `DataType::dynamic_with_max_types(4)`, `DataType::variant(...)` |
 
 ## SELECT source modifiers and clauses
 
@@ -97,7 +97,7 @@ Legend:
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
 | ➡️ | Regular comparison/logical operators | Diesel built-ins. |
 | ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
-| ⬜ | `LIKE` variants / regexp helpers | planned `match`, `multiMatch*`, `like` examples. |
+| ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()`, ClickHouse `.ilike()` / `.not_ilike()`, function helpers `like`, `like_escape`, `ilike`, `not_ilike`, `regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*`. |
 
 ## Scalar functions
 
@@ -108,7 +108,7 @@ Legend:
 | ✅ 🧪 | Arrays | `has`, `has_any`, `has_all`, `array_join`, `array_element`, `array_concat`, `array_distinct`, `array_map`, `array_filter`, `array_exists`, `array_all`, `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
 | ✅ 🧪 | JSON | `json_extract_*`, `json_extract_*_path`, `json_extract_*_ci`, `json_value`, `json_query`, `json_exists`, `json_has`, `json_length`, `simple_json_extract_*`, `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
-| ✅ 🧪 | Strings | `lower`, `upper`, `substring`, `position`, `replace_all`, `concat`, `regexp_match` | more regexp/search variants, token functions |
+| ✅ 🧪 | Strings | `lower`, `upper`, `substring`, `position`, `replace_all`, `concat`, `regexp_match`, `like`, `ilike`, `multi_match_any`, `multi_match_any_index`, `multi_match_all_indices`, `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain`, `domain_without_www`, `top_level_domain`, `url_path`, `base64_encode`, `hex`, `city_hash64`, `to_ipv4`, `is_ipv6_string` | More specialized variants can be added by demand. |
 | ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))`, `cosine_distance`, `l1_distance`, `linf_distance`, `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int*`, `to_uint*`, `to_float*`, `to_*_or_null`, `to_*_or_zero`, `to_string`, `cast::<ST, _>(...)`, `accurate_cast*`, `is_null`, `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
@@ -136,10 +136,10 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Parametric quantiles | `quantile(0.95, x)`, `quantile_exact(0.5, x)`, `quantile_tdigest(0.99, x)`, `quantile_timing(0.95, x)`, `quantile_deterministic(0.5, x, seed)`, `quantiles([0.25, 0.75], x)`, `quantiles_timing([...], x)` |
 | ✅ 🧪 | `topK` / histograms | `top_k(10, x)`, `histogram(20, x)` |
 | ✅ | Any-value aggregates | `any_value(x)`, `any_last(x)` |
-| ✅ 🧪 | Statistical aggregates | `corr(x, y)`, `covar_pop(x, y)`, `covar_samp(x, y)`, `covar_pop_stable(x, y)`, `covar_samp_stable(x, y)` |
-| ⬜ | General aggregate combinator builder | planned `sum().if_(pred).or_null()`-style API | Could reduce one-off functions. |
+| ✅ 🧪 | Statistical aggregates | `corr(x, y)`, `covar_pop(x, y)`, `covar_samp(x, y)`, `covar_pop_stable(x, y)`, `covar_samp_stable(x, y)`, `stddev_pop(x)`, `stddev_samp(x)`, `var_pop(x)`, `var_samp(x)`, `analysis_of_variance(x, group)`, `mann_whitney_u_test(x, sample)`, `approx_top_sum(n, value, weight)` | Stable variants included for covariance, stddev, and variance. |
+| ✅ 🧪 | General aggregate combinator builder | `aggregate::<Double>("avg").arg(x).or_null().if_(pred)`, `aggregate::<BigInt>("count").no_args().if_(pred)`, `.distinct()`, `.state()`, `.merge_state()`, `.combinator("ForEach")` | Provides a typed escape hatch for ClickHouse aggregate suffix combinators while preserving one-off helpers for common cases. |
 | ✅ 🧪 | State/merge combinators | `sum_state(x)`, `sum_merge(state)`, `count_state()`, `uniq_exact_merge(state)`, `finalize_aggregation(state)` | Includes `AggregateFunction<T>` type marker and DDL type rendering. |
-| 🚧 | More approximate/statistical aggregates | `stddev*`, `var*`, ANOVA, Mann-Whitney, approximate top sum | Add by demand. |
+| ✅ 🧪 | Approx/statistical long tail | `stddev*`, `var*`, `analysis_of_variance`, `mann_whitney_u_test`, `approx_top_sum`, `approx_top_sum_with_reserved` | Additional specialized aggregate families can be added by demand. |
 
 ## Window functions
 

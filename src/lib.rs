@@ -60,9 +60,11 @@ mod vectors;
 mod window;
 
 pub use aggregates::{
-    BinaryParametricAggregate, Histogram, HistogramBucket, ParametricAggregate, Quantile,
-    histogram, quantile, quantile_deterministic, quantile_exact, quantile_tdigest, quantile_timing,
-    quantiles, quantiles_timing, top_k,
+    AggregateBuilder, AggregateCall, AggregateIfArgs, ApproxTopSumItem, ApproxTopSumResult,
+    BinaryParametricAggregate, Histogram, HistogramBucket, NoAggregateArgs, OneAggregateArg,
+    ParametricAggregate, Quantile, TwoAggregateArgs, aggregate, approx_top_sum,
+    approx_top_sum_with_reserved, histogram, quantile, quantile_deterministic, quantile_exact,
+    quantile_tdigest, quantile_timing, quantiles, quantiles_timing, top_k,
 };
 pub use backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, to_sql};
 pub use cast::{
@@ -88,31 +90,36 @@ pub use ddl::{
     vector_similarity_index, versioned_collapsing_merge_tree,
 };
 pub use functions::{
-    abs, any_last, any_value, arg_max, arg_min, array_concat, array_distinct, array_element,
-    array_join, avg_if, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, ceil,
-    city_hash64, concat, corr, cosine_distance, count_if, count_merge, count_merge_state,
-    count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable, cut_query_string,
-    date_diff, date_trunc, domain, domain_without_www, empty, farm_fingerprint64,
+    abs, analysis_of_variance, any_last, any_value, arg_max, arg_min, array_concat, array_distinct,
+    array_element, array_join, avg_if, avg_merge, avg_merge_state, avg_state, base64_decode,
+    base64_encode, ceil, city_hash64, concat, corr, cosine_distance, count_if, count_merge,
+    count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    cut_query_string, date_diff, date_trunc, domain, domain_without_www, empty, farm_fingerprint64,
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array,
-    group_array_if, group_array_merge, group_array_state, has, has_all, has_any, hex, if_, int_div,
-    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    is_not_null, is_null, is_valid_json, json_exists, json_extract_bool, json_extract_float,
-    json_extract_int, json_extract_int_ci, json_extract_raw, json_extract_raw_ci,
-    json_extract_string, json_extract_string_ci, json_extract_uint, json_has, json_length,
-    json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm, least, length,
-    linf_distance, linf_norm, lower, map_contains, map_from_arrays, map_keys, map_values, max_if,
-    max_merge, max_state, min_if, min_merge, min_state, not_empty, position, regexp_match,
-    replace_all, round, simple_json_extract_float, simple_json_extract_int,
-    simple_json_extract_string, simple_json_has, sip_hash64, substring, sum_if, sum_merge,
-    sum_merge_state, sum_state, to_bool, to_date, to_date_time, to_date_time64, to_day_of_month,
-    to_float32, to_float64, to_float64_or_null, to_float64_or_zero, to_hour, to_int8, to_int16,
-    to_int32, to_int32_or_null, to_int64, to_int64_or_null, to_int64_or_zero, to_int128, to_int256,
-    to_ipv4, to_ipv6, to_minute, to_month, to_start_of_day, to_start_of_hour, to_start_of_minute,
-    to_start_of_month, to_start_of_year, to_string, to_uint8, to_uint16, to_uint32,
-    to_uint32_or_null, to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, to_uint256,
-    to_unix_timestamp, to_year, top_level_domain, try_base64_decode, unhex, uniq, uniq_exact,
-    uniq_exact_if, uniq_exact_merge, uniq_exact_state, uniq_if, uniq_merge, uniq_state, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, xx_hash64,
+    group_array_if, group_array_merge, group_array_state, has, has_all, has_any, hex, if_, ilike,
+    ilike_escape, int_div, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string,
+    is_ipv4_string, is_ipv6_string, is_not_null, is_null, is_valid_json, json_exists,
+    json_extract_bool, json_extract_float, json_extract_int, json_extract_int_ci, json_extract_raw,
+    json_extract_raw_ci, json_extract_string, json_extract_string_ci, json_extract_uint, json_has,
+    json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm, least, length,
+    like, like_escape, linf_distance, linf_norm, lower, mann_whitney_u_test, map_contains,
+    map_from_arrays, map_keys, map_values, max_if, max_merge, max_state, min_if, min_merge,
+    min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any, multi_fuzzy_match_any_index,
+    multi_match_all_indices, multi_match_any, multi_match_any_index, not_empty, not_ilike,
+    not_ilike_escape, not_like, not_like_escape, position, regexp_match, replace_all, round,
+    simple_json_extract_float, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable,
+    substring, sum_if, sum_merge, sum_merge_state, sum_state, to_bool, to_date, to_date_time,
+    to_date_time64, to_day_of_month, to_float32, to_float64, to_float64_or_null,
+    to_float64_or_zero, to_hour, to_int8, to_int16, to_int32, to_int32_or_null, to_int64,
+    to_int64_or_null, to_int64_or_zero, to_int128, to_int256, to_ipv4, to_ipv6, to_minute,
+    to_month, to_start_of_day, to_start_of_hour, to_start_of_minute, to_start_of_month,
+    to_start_of_year, to_string, to_uint8, to_uint16, to_uint32, to_uint32_or_null, to_uint64,
+    to_uint64_or_null, to_uint64_or_zero, to_uint128, to_uint256, to_unix_timestamp, to_year,
+    top_level_domain, try_base64_decode, unhex, uniq, uniq_exact, uniq_exact_if, uniq_exact_merge,
+    uniq_exact_state, uniq_if, uniq_merge, uniq_state, upper, url_fragment, url_path,
+    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, var_samp,
+    var_samp_stable, xx_hash64,
 };
 pub use grouping::{
     GroupByAll, GroupByModifier, GroupByModifierKind, Grouping, GroupingSets, cube, group_by_all,
@@ -132,7 +139,10 @@ pub use json::{
     json_extract_raw_path, json_extract_string_ci_path, json_extract_string_path,
     json_extract_uint_path,
 };
-pub use operators::{GlobalIn, GlobalInDsl, NotGlobalIn, NotGlobalInDsl};
+pub use operators::{
+    ClickHouseTextExpressionMethods, GlobalIn, GlobalInDsl, ILike, NotGlobalIn, NotGlobalInDsl,
+    NotILike,
+};
 pub use ordering::{FillBound, NoFillBound, WithFill, with_fill};
 pub use vectors::{
     VectorBytes, VectorBytesEncoding, VectorLiteral, vector_f32, vector_f32_binary, vector_f32_hex,
@@ -152,7 +162,8 @@ pub use window::{
 pub mod sql_types {
     pub use crate::types::{
         AggregateFunction, Array, BFloat16, DateTime64, Decimal32, Decimal64, Decimal128,
-        Decimal256, Enum8, Enum16, IPv4, IPv6, Int8, Int128, Int256, Json, LowCardinality, Map,
-        Nested, Nothing, Tuple, UInt8, UInt16, UInt32, UInt64, UInt128, UInt256, Uuid,
+        Decimal256, Dynamic, Enum8, Enum16, IPv4, IPv6, Int8, Int128, Int256, Json, LowCardinality,
+        Map, Nested, Nothing, Point, Ring, Tuple, UInt8, UInt16, UInt32, UInt64, UInt128, UInt256,
+        Uuid, Variant,
     };
 }

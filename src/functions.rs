@@ -370,6 +370,90 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `like(haystack, pattern)` function form of `haystack LIKE pattern`.
+    #[sql_name = "like"]
+    fn like<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `like(haystack, pattern, escape)` with a custom escape character.
+    #[sql_name = "like"]
+    fn like_escape<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text, escape: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `notLike(haystack, pattern)` function form of `haystack NOT LIKE pattern`.
+    #[sql_name = "notLike"]
+    fn not_like<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `notLike(haystack, pattern, escape)` with a custom escape character.
+    #[sql_name = "notLike"]
+    fn not_like_escape<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text, escape: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `ilike(haystack, pattern)` function form of `haystack ILIKE pattern`.
+    #[sql_name = "ilike"]
+    fn ilike<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `ilike(haystack, pattern, escape)` with a custom escape character.
+    #[sql_name = "ilike"]
+    fn ilike_escape<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text, escape: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `notILike(haystack, pattern)` function form of `haystack NOT ILIKE pattern`.
+    #[sql_name = "notILike"]
+    fn not_ilike<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `notILike(haystack, pattern, escape)` with a custom escape character.
+    #[sql_name = "notILike"]
+    fn not_ilike_escape<T: SqlType + SingleValue>(haystack: T, pattern: diesel::sql_types::Text, escape: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `multiMatchAny(haystack, patterns)`.
+    #[sql_name = "multiMatchAny"]
+    fn multi_match_any<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `multiMatchAnyIndex(haystack, patterns)`.
+    #[sql_name = "multiMatchAnyIndex"]
+    fn multi_match_any_index<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `multiMatchAllIndices(haystack, patterns)`.
+    #[sql_name = "multiMatchAllIndices"]
+    fn multi_match_all_indices<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> Array<crate::types::UInt64>;
+}
+
+define_sql_function! {
+    /// `multiFuzzyMatchAny(haystack, distance, patterns)`.
+    #[sql_name = "multiFuzzyMatchAny"]
+    fn multi_fuzzy_match_any<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `multiFuzzyMatchAnyIndex(haystack, distance, patterns)`.
+    #[sql_name = "multiFuzzyMatchAnyIndex"]
+    fn multi_fuzzy_match_any_index<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `multiFuzzyMatchAllIndices(haystack, distance, patterns)`.
+    #[sql_name = "multiFuzzyMatchAllIndices"]
+    fn multi_fuzzy_match_all_indices<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> Array<crate::types::UInt64>;
+}
+
+define_sql_function! {
     /// `has(array, value)`.
     #[sql_name = "has"]
     fn has<T: SqlType + SingleValue>(array: Array<T>, value: T) -> diesel::sql_types::Bool;
@@ -989,6 +1073,76 @@ define_sql_function! {
     #[aggregate]
     #[sql_name = "argMin"]
     fn arg_min<T: SqlType + SingleValue, V: SqlType + SingleValue>(arg: T, val: V) -> T;
+}
+
+define_sql_function! {
+    /// `stddevPop(x)`.
+    #[aggregate]
+    #[sql_name = "stddevPop"]
+    fn stddev_pop<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `stddevSamp(x)`.
+    #[aggregate]
+    #[sql_name = "stddevSamp"]
+    fn stddev_samp<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `stddevPopStable(x)`.
+    #[aggregate]
+    #[sql_name = "stddevPopStable"]
+    fn stddev_pop_stable<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `stddevSampStable(x)`.
+    #[aggregate]
+    #[sql_name = "stddevSampStable"]
+    fn stddev_samp_stable<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `varPop(x)`.
+    #[aggregate]
+    #[sql_name = "varPop"]
+    fn var_pop<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `varSamp(x)`.
+    #[aggregate]
+    #[sql_name = "varSamp"]
+    fn var_samp<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `varPopStable(x)`.
+    #[aggregate]
+    #[sql_name = "varPopStable"]
+    fn var_pop_stable<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `varSampStable(x)`.
+    #[aggregate]
+    #[sql_name = "varSampStable"]
+    fn var_samp_stable<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `analysisOfVariance(value, group_no)`.
+    #[aggregate]
+    #[sql_name = "analysisOfVariance"]
+    fn analysis_of_variance<T: SqlType + SingleValue, G: SqlType + SingleValue>(value: T, group_no: G) -> crate::types::Tuple<(diesel::sql_types::Double, diesel::sql_types::Double)>;
+}
+
+define_sql_function! {
+    /// `mannWhitneyUTest(sample_data, sample_index)`.
+    #[aggregate]
+    #[sql_name = "mannWhitneyUTest"]
+    fn mann_whitney_u_test<T: SqlType + SingleValue, G: SqlType + SingleValue>(sample_data: T, sample_index: G) -> crate::types::Tuple<(diesel::sql_types::Double, diesel::sql_types::Double)>;
 }
 
 define_sql_function! {

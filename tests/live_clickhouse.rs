@@ -19,26 +19,28 @@ use testcontainers_modules::{
 };
 
 use diesel_clickhouse::{
-    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, NestedField, OverDsl, Setting,
-    TableEngine, TableIndex, abs, accurate_cast_or_null, aggregating_merge_tree, alter_table,
-    array_count, array_exists, array_filter, array_map, base64_decode, base64_encode, cast, ceil,
-    city_hash64, concat, corr, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp,
+    ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
+    NestedField, OverDsl, Setting, TableEngine, TableIndex, abs, accurate_cast_or_null, aggregate,
+    aggregating_merge_tree, alter_table, analysis_of_variance, approx_top_sum, array_count,
+    array_exists, array_filter, array_map, base64_decode, base64_encode, cast, ceil, city_hash64,
+    concat, corr, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp,
     covar_samp_stable, create_materialized_view, create_table, cut_query_string, date_diff,
     dense_rank, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
     first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
-    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    is_null, is_valid_json, json_extract_int, json_extract_int_path, json_extract_string_path,
-    json_has, json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length,
-    lower, map_apply, map_contains, map_filter, max_if, merge_tree, min_if, mutation_assignment,
+    ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, is_null, is_valid_json, json_extract_int, json_extract_int_path,
+    json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
+    lambda2, least, length, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
+    max_if, merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment,
     partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
     quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
-    simple_json_extract_string, simple_json_has, sip_hash64, substring, sum_merge, sum_state,
-    summing_merge_tree, to_date_time, to_float64, to_float64_or_null, to_int32, to_int32_or_null,
-    to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null, top_k,
-    top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32, with_fill,
-    xx_hash64,
+    simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable,
+    stddev_samp, substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
+    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
+    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
+    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
+    var_pop, var_pop_stable, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -251,6 +253,17 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .column("amount", DataType::decimal(18, 6))
         .column("status", DataType::enum8([("draft", 1), ("published", 2)]))
         .column("kind", DataType::enum16([("organic", 100), ("paid", 200)]))
+        .column("location", DataType::Point)
+        .column("boundary", DataType::Ring)
+        .column("flex", DataType::dynamic_with_max_types(4))
+        .column(
+            "variant_value",
+            DataType::variant([
+                DataType::UInt64,
+                DataType::String,
+                DataType::array(DataType::UInt64),
+            ]),
+        )
         .column(
             "dimensions",
             DataType::tuple([DataType::String, DataType::UInt64, DataType::Float64]),
@@ -266,6 +279,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     fixture
         .client
         .query(&to_sql(&type_showcase_ddl)?)
+        .with_option("allow_experimental_dynamic_type", "1")
+        .with_option("allow_experimental_variant_type", "1")
         .execute()
         .await?;
     let type_showcase_exists: u64 = fixture
@@ -775,6 +790,50 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     assert_eq!(aggregate_row.2, 4);
     assert!((10.0..=60.0).contains(&aggregate_row.3));
 
+    let stats_sql = to_sql(&events.select((
+        stddev_pop(latency_ms),
+        stddev_samp(latency_ms),
+        stddev_pop_stable(latency_ms),
+        var_pop(latency_ms),
+        var_pop_stable(latency_ms),
+        to_string(analysis_of_variance(latency_ms, success)),
+        to_string(mann_whitney_u_test(latency_ms, success)),
+        to_string(approx_top_sum(2, tenant_id, id)),
+    )))?;
+    let stats_row: (f64, f64, f64, f64, f64, String, String, String) =
+        fixture.client.query(&stats_sql).fetch_one().await?;
+    assert!(stats_row.0 > 0.0);
+    assert!(stats_row.1 > 0.0);
+    assert!(stats_row.2 > 0.0);
+    assert!(stats_row.3 > 0.0);
+    assert!(stats_row.4 > 0.0);
+    assert!(stats_row.5.starts_with('('));
+    assert!(stats_row.6.starts_with('('));
+    assert!(stats_row.7.starts_with('['));
+
+    let generic_aggregate_sql = to_sql(
+        &events.select((
+            aggregate::<diesel::sql_types::Double>("sum")
+                .arg(latency_ms)
+                .if_(success),
+            aggregate::<diesel::sql_types::BigInt>("count")
+                .no_args()
+                .if_(success),
+            aggregate::<diesel::sql_types::Double>("avg")
+                .arg(latency_ms)
+                .or_default()
+                .if_(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "latency_ms > 1000",
+                )),
+        )),
+    )?;
+    let generic_aggregate_row: (f64, u64, f64) = fixture
+        .client
+        .query(&generic_aggregate_sql)
+        .fetch_one()
+        .await?;
+    assert_eq!(generic_aggregate_row, (130.0, 4, 0.0));
+
     let quantiles_sql = to_sql(&events.select(quantiles([0.25, 0.5, 0.75], latency_ms)))?;
     let latency_quantiles: Vec<f64> = fixture.client.query(&quantiles_sql).fetch_one().await?;
     assert_eq!(latency_quantiles.len(), 3);
@@ -1194,6 +1253,29 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             true,
         )
     );
+
+    let pattern_array = || {
+        diesel::dsl::sql::<diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>>(
+            "['^ac', '^beta']",
+        )
+    };
+    let search_sql = to_sql(&events.filter(id.eq(1)).select((
+        tenant_id.like("ac%"),
+        tenant_id.ilike("%AC%"),
+        ilike(tenant_id, "%AC%"),
+        multi_match_any(tenant_id, pattern_array()),
+        multi_match_any_index(tenant_id, pattern_array()),
+    )))?;
+    let search_row: (bool, bool, bool, bool, u64) = fixture
+        .client
+        .query(&search_sql)
+        .bind("ac%")
+        .bind("%AC%")
+        .bind("%AC%")
+        .bind(1_i64)
+        .fetch_one()
+        .await?;
+    assert_eq!(search_row, (true, true, true, true, 1));
 
     let url_value = "https://www.example.com/path/to?q=1#frag";
     let url_sql = to_sql(&diesel::select((
