@@ -20,22 +20,24 @@ use testcontainers_modules::{
 
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, NestedField, OverDsl, Setting,
-    TableEngine, TableIndex, abs, aggregating_merge_tree, alter_table, array_count, array_exists,
-    array_filter, array_map, base64_decode, base64_encode, ceil, city_hash64, concat, corr,
-    count_if, count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
-    create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
-    domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    TableEngine, TableIndex, abs, accurate_cast_or_null, aggregating_merge_tree, alter_table,
+    array_count, array_exists, array_filter, array_map, base64_decode, base64_encode, cast, ceil,
+    city_hash64, concat, corr, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp,
+    covar_samp_stable, create_materialized_view, create_table, cut_query_string, date_diff,
+    dense_rank, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
     first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    json_extract_int, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower, map_apply,
-    map_contains, map_filter, max_if, merge_tree, min_if, partition_by, position, prewhere,
-    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
-    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
-    row_number, sample_offset, sip_hash64, substring, sum_merge, sum_state, summing_merge_tree,
-    to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, top_k,
-    top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, vector_f32, with_fill,
-    xx_hash64,
+    is_null, is_valid_json, json_extract_int, json_extract_int_path, json_extract_string_path,
+    json_has, json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length,
+    lower, map_apply, map_contains, map_filter, max_if, merge_tree, min_if, partition_by, position,
+    prewhere, projection, quantile, quantile_deterministic, quantile_exact, quantile_timing,
+    quantiles, quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup,
+    round, row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, substring, sum_merge, sum_state, summing_merge_tree, to_date_time,
+    to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql,
+    to_string, to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex,
+    uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol,
+    url_query_string, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -934,6 +936,74 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .fetch_one()
         .await?;
     assert_eq!(scalar_row, (2, true, 10, 2));
+
+    let cast_sql = to_sql(&diesel::select((
+        to_int32(diesel::dsl::sql::<diesel::sql_types::Text>("'42'")),
+        to_uint64(is_null(to_int32_or_null(diesel::dsl::sql::<
+            diesel::sql_types::Text,
+        >("'oops'")))),
+        to_uint64(is_null(to_uint64_or_null(diesel::dsl::sql::<
+            diesel::sql_types::Text,
+        >("'123'")))),
+        to_uint64(is_null(to_float64_or_null(diesel::dsl::sql::<
+            diesel::sql_types::Text,
+        >("'abc'")))),
+        cast::<diesel_clickhouse::sql_types::UInt64, _>(
+            diesel::dsl::sql::<diesel::sql_types::Text>("'42'"),
+            "UInt64",
+        ),
+        to_uint64(is_null(accurate_cast_or_null::<
+            diesel_clickhouse::sql_types::UInt8,
+            _,
+        >(
+            diesel::dsl::sql::<diesel::sql_types::Text>("'300'"),
+            "UInt8",
+        ))),
+    )))?;
+    let cast_row: (i32, u64, u64, u64, u64, u64) =
+        fixture.client.query(&cast_sql).fetch_one().await?;
+    assert_eq!(cast_row, (42, 1, 0, 1, 42, 1));
+
+    let json_variant_sql = to_sql(&events.filter(id.eq(1)).select((
+        json_extract_string_path(payload, ["country"]),
+        json_extract_int_path(payload, ["score"]),
+        to_uint64(json_has(payload, "country")),
+        json_length(payload),
+        json_value(payload, "$.score"),
+        to_uint64(is_valid_json(payload)),
+    )))?;
+    let json_variant_row: (String, i64, u64, u64, String, u64) = fixture
+        .client
+        .query(&json_variant_sql)
+        .bind("country")
+        .bind("$.score")
+        .bind(1_i64)
+        .fetch_one()
+        .await?;
+    assert_eq!(
+        json_variant_row,
+        ("US".to_string(), 10, 1, 2, "10".to_string(), 1)
+    );
+
+    let simple_json_doc =
+        diesel::dsl::sql::<diesel::sql_types::Text>("'{\"country\":\"US\",\"score\":10}'");
+    let simple_json_sql = to_sql(&diesel::select((
+        simple_json_extract_string(
+            simple_json_doc.clone(),
+            diesel::dsl::sql::<diesel::sql_types::Text>("'country'"),
+        ),
+        simple_json_extract_int(
+            simple_json_doc.clone(),
+            diesel::dsl::sql::<diesel::sql_types::Text>("'score'"),
+        ),
+        to_uint64(simple_json_has(
+            simple_json_doc,
+            diesel::dsl::sql::<diesel::sql_types::Text>("'score'"),
+        )),
+    )))?;
+    let simple_json_row: (String, i64, u64) =
+        fixture.client.query(&simple_json_sql).fetch_one().await?;
+    assert_eq!(simple_json_row, ("US".to_string(), 10, 1));
 
     let higher_order_sql = to_sql(&events.filter(id.eq(1)).select((
         to_string(array_map(lambda("tag", "upper(tag)"), tags)),

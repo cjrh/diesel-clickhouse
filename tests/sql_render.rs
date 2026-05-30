@@ -2,27 +2,33 @@ use diesel::prelude::*;
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField,
     OutfileCompression, OverDsl, Setting, TableEngine, TableIndex, VectorDistanceFunction,
-    VectorQuantization, WindowFrameBound, abs, aggregating_merge_tree, alter_table, array_all,
-    array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state,
-    base64_decode, base64_encode, buffer, ceil, city_hash64, collapsing_merge_tree, concat, corr,
+    VectorQuantization, WindowFrameBound, abs, accurate_cast, accurate_cast_or_default,
+    accurate_cast_or_null, aggregating_merge_tree, alter_table, array_all, array_count,
+    array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode,
+    base64_encode, buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat, corr,
     cosine_distance, count_if, count_merge, count_merge_state, count_state, covar_pop,
     covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table, cube,
     cut_query_string, date_diff, dense_rank, distributed, domain, domain_without_www,
     farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
     greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
     histogram, if_, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
-    is_ipv6_string, json_extract_int, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame,
-    lambda, lambda2, least, length, linf_distance, linf_norm, lower, map_apply, map_contains,
-    map_filter, map_from_arrays, map_keys, map_values, max_merge, max_state, min_merge, min_state,
-    partition_by, position, prewhere, projection, quantile, quantile_deterministic, quantile_exact,
-    quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
-    replacing_merge_tree, rollup, round, row_number, sample, sample_offset, sip_hash64, substring,
-    sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_date_time, to_float64,
-    to_int64, to_ipv4, to_ipv6, to_sql, to_start_of_hour, to_string, to_uint64, top_k,
-    top_level_domain, try_base64_decode, unhex, uniq_exact_merge, uniq_exact_state, uniq_merge,
-    uniq_state, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
-    vector_f32, vector_f64, vector_similarity_index, versioned_collapsing_merge_tree, with_fill,
-    with_totals, xx_hash64,
+    is_ipv6_string, is_valid_json, json_exists, json_extract_int, json_extract_int_ci,
+    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
+    json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
+    json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
+    length, linf_distance, linf_norm, lower, map_apply, map_contains, map_filter, map_from_arrays,
+    map_keys, map_values, max_merge, max_state, min_merge, min_state, partition_by, position,
+    prewhere, projection, quantile, quantile_deterministic, quantile_exact, quantile_timing,
+    quantiles, quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup,
+    round, row_number, sample, sample_offset, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, substring, sum_merge, sum_merge_state, sum_state,
+    summing_merge_tree_with, to_bool, to_date_time, to_float32, to_float64, to_float64_or_null,
+    to_int32, to_int32_or_null, to_int64, to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql,
+    to_start_of_hour, to_string, to_uint32, to_uint64, to_uint64_or_null, to_uint64_or_zero,
+    to_uint128, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_merge,
+    uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full,
+    url_protocol, url_query_string, vector_f32, vector_f64, vector_similarity_index,
+    versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -179,6 +185,56 @@ fn renders_string_numeric_and_conversion_functions() {
     assert_eq!(
         to_sql(&numeric_query).unwrap(),
         "SELECT abs(`events`.`latency_ms`), round(`events`.`latency_ms`), floor(`events`.`latency_ms`), ceil(`events`.`latency_ms`), least(`events`.`latency_ms`, ?), greatest(`events`.`latency_ms`, ?) FROM `events`"
+    );
+}
+
+#[test]
+fn renders_cast_and_json_variant_helpers() {
+    use self::events::dsl::*;
+
+    let cast_query = events.select((
+        to_bool(success),
+        to_int32(payload),
+        to_int32_or_null(payload),
+        to_int64_or_zero(payload),
+        to_int128(id),
+        to_uint32(id),
+        to_uint64_or_null(payload),
+        to_uint64_or_zero(payload),
+        to_uint128(id),
+        to_float32(id),
+        to_float64_or_null(payload),
+        cast::<diesel_clickhouse::sql_types::UInt64, _>(payload, "UInt64"),
+        accurate_cast::<diesel::sql_types::Integer, _>(payload, "Int32"),
+        accurate_cast_or_null::<diesel_clickhouse::sql_types::UInt8, _>(payload, "UInt8"),
+        accurate_cast_or_default::<diesel::sql_types::Text, _>(id, "String"),
+    ));
+    let json_query_render = events.select((
+        json_extract_string_path(payload, ["user", "name"]),
+        json_extract_int_path(payload, ["metrics", "score"]),
+        json_extract_raw_path(payload, ["items"]),
+        json_extract_string_ci(payload, "Country"),
+        json_extract_int_ci(payload, "Score"),
+        json_extract_int_ci_path(payload, ["DATA", "Count"]),
+        json_extract_raw_ci(payload, "Items"),
+        json_has(payload, "score"),
+        json_length(payload),
+        json_value(payload, "$.score"),
+        json_query(payload, "$.items"),
+        json_exists(payload, "$.score"),
+        is_valid_json(payload),
+        simple_json_extract_string(payload, "country"),
+        simple_json_extract_int(payload, "score"),
+        simple_json_has(payload, "score"),
+    ));
+
+    assert_eq!(
+        to_sql(&cast_query).unwrap(),
+        "SELECT toBool(`events`.`success`), toInt32(`events`.`payload`), toInt32OrNull(`events`.`payload`), toInt64OrZero(`events`.`payload`), toInt128(`events`.`id`), toUInt32(`events`.`id`), toUInt64OrNull(`events`.`payload`), toUInt64OrZero(`events`.`payload`), toUInt128(`events`.`id`), toFloat32(`events`.`id`), toFloat64OrNull(`events`.`payload`), CAST(`events`.`payload`, 'UInt64'), accurateCast(`events`.`payload`, 'Int32'), accurateCastOrNull(`events`.`payload`, 'UInt8'), accurateCastOrDefault(`events`.`id`, 'String') FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&json_query_render).unwrap(),
+        "SELECT JSONExtractString(`events`.`payload`, 'user', 'name'), JSONExtractInt(`events`.`payload`, 'metrics', 'score'), JSONExtractRaw(`events`.`payload`, 'items'), JSONExtractStringCaseInsensitive(`events`.`payload`, ?), JSONExtractIntCaseInsensitive(`events`.`payload`, ?), JSONExtractIntCaseInsensitive(`events`.`payload`, 'DATA', 'Count'), JSONExtractRawCaseInsensitive(`events`.`payload`, ?), JSONHas(`events`.`payload`, ?), JSONLength(`events`.`payload`), JSON_VALUE(`events`.`payload`, ?), JSON_QUERY(`events`.`payload`, ?), JSON_EXISTS(`events`.`payload`, ?), isValidJSON(`events`.`payload`), simpleJSONExtractString(`events`.`payload`, ?), simpleJSONExtractInt(`events`.`payload`, ?), simpleJSONHas(`events`.`payload`, ?) FROM `events`"
     );
 }
 

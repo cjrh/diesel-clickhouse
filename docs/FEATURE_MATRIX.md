@@ -107,11 +107,11 @@ Legend:
 | ✅ 🧪 | Conditional/basic/numeric helpers | `if_`, `length`, `empty`, `not_empty`, `int_div`, `abs`, `round`, `floor`, `ceil`, `least`, `greatest` | `multiIf`, `coalesce`, `assumeNotNull` |
 | ✅ 🧪 | Arrays | `has`, `has_any`, `has_all`, `array_join`, `array_element`, `array_concat`, `array_distinct`, `array_map`, `array_filter`, `array_exists`, `array_all`, `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
-| ✅ 🧪 | JSON | `json_extract_string`, `json_extract_int`, `json_extract_float`, `json_extract_bool`, `json_extract_raw` | case-insensitive variants, paths, dynamic JSON subcolumns |
+| ✅ 🧪 | JSON | `json_extract_*`, `json_extract_*_path`, `json_extract_*_ci`, `json_value`, `json_query`, `json_exists`, `json_has`, `json_length`, `simple_json_extract_*`, `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
 | ✅ 🧪 | Strings | `lower`, `upper`, `substring`, `position`, `replace_all`, `concat`, `regexp_match` | more regexp/search variants, token functions |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain`, `domain_without_www`, `top_level_domain`, `url_path`, `base64_encode`, `hex`, `city_hash64`, `to_ipv4`, `is_ipv6_string` | More specialized variants can be added by demand. |
 | ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))`, `cosine_distance`, `l1_distance`, `linf_distance`, `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
-| ✅ 🧪 | Type conversion | `to_int64`, `to_uint64`, `to_float64`, `to_string` | complete `toUInt*`/`toInt*` families, `CAST`, `accurateCast*` |
+| ✅ 🧪 | Type conversion | `to_int*`, `to_uint*`, `to_float*`, `to_*_or_null`, `to_*_or_zero`, `to_string`, `cast::<ST, _>(...)`, `accurate_cast*`, `is_null`, `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
 
 ## Vector search
 

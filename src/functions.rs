@@ -112,9 +112,81 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `toBool(expr)`.
+    #[sql_name = "toBool"]
+    fn to_bool<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `toInt8(expr)`.
+    #[sql_name = "toInt8"]
+    fn to_int8<T: SqlType + SingleValue>(expr: T) -> crate::types::Int8;
+}
+
+define_sql_function! {
+    /// `toInt16(expr)`.
+    #[sql_name = "toInt16"]
+    fn to_int16<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::SmallInt;
+}
+
+define_sql_function! {
+    /// `toInt32(expr)`.
+    #[sql_name = "toInt32"]
+    fn to_int32<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Integer;
+}
+
+define_sql_function! {
     /// `toInt64(expr)`.
     #[sql_name = "toInt64"]
     fn to_int64<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `toInt128(expr)`.
+    #[sql_name = "toInt128"]
+    fn to_int128<T: SqlType + SingleValue>(expr: T) -> crate::types::Int128;
+}
+
+define_sql_function! {
+    /// `toInt256(expr)`.
+    #[sql_name = "toInt256"]
+    fn to_int256<T: SqlType + SingleValue>(expr: T) -> crate::types::Int256;
+}
+
+define_sql_function! {
+    /// `toInt32OrNull(expr)`.
+    #[sql_name = "toInt32OrNull"]
+    fn to_int32_or_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<diesel::sql_types::Integer>;
+}
+
+define_sql_function! {
+    /// `toInt64OrNull(expr)`.
+    #[sql_name = "toInt64OrNull"]
+    fn to_int64_or_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<diesel::sql_types::BigInt>;
+}
+
+define_sql_function! {
+    /// `toInt64OrZero(expr)`.
+    #[sql_name = "toInt64OrZero"]
+    fn to_int64_or_zero<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `toUInt8(expr)`.
+    #[sql_name = "toUInt8"]
+    fn to_uint8<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt8;
+}
+
+define_sql_function! {
+    /// `toUInt16(expr)`.
+    #[sql_name = "toUInt16"]
+    fn to_uint16<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt16;
+}
+
+define_sql_function! {
+    /// `toUInt32(expr)`.
+    #[sql_name = "toUInt32"]
+    fn to_uint32<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt32;
 }
 
 define_sql_function! {
@@ -124,9 +196,57 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `toUInt128(expr)`.
+    #[sql_name = "toUInt128"]
+    fn to_uint128<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt128;
+}
+
+define_sql_function! {
+    /// `toUInt256(expr)`.
+    #[sql_name = "toUInt256"]
+    fn to_uint256<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt256;
+}
+
+define_sql_function! {
+    /// `toUInt32OrNull(expr)`.
+    #[sql_name = "toUInt32OrNull"]
+    fn to_uint32_or_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<crate::types::UInt32>;
+}
+
+define_sql_function! {
+    /// `toUInt64OrNull(expr)`.
+    #[sql_name = "toUInt64OrNull"]
+    fn to_uint64_or_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<crate::types::UInt64>;
+}
+
+define_sql_function! {
+    /// `toUInt64OrZero(expr)`.
+    #[sql_name = "toUInt64OrZero"]
+    fn to_uint64_or_zero<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `toFloat32(expr)`.
+    #[sql_name = "toFloat32"]
+    fn to_float32<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Float;
+}
+
+define_sql_function! {
     /// `toFloat64(expr)`.
     #[sql_name = "toFloat64"]
     fn to_float64<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `toFloat64OrNull(expr)`.
+    #[sql_name = "toFloat64OrNull"]
+    fn to_float64_or_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<diesel::sql_types::Double>;
+}
+
+define_sql_function! {
+    /// `toFloat64OrZero(expr)`.
+    #[sql_name = "toFloat64OrZero"]
+    fn to_float64_or_zero<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
@@ -193,6 +313,18 @@ define_sql_function! {
     /// `notEmpty(expr)`.
     #[sql_name = "notEmpty"]
     fn not_empty<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `isNull(expr)`.
+    #[sql_name = "isNull"]
+    fn is_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `isNotNull(expr)`.
+    #[sql_name = "isNotNull"]
+    fn is_not_null<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
@@ -331,6 +463,90 @@ define_sql_function! {
     /// `JSONExtractRaw(json, key)`.
     #[sql_name = "JSONExtractRaw"]
     fn json_extract_raw<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `JSONExtractUInt(json, key)`.
+    #[sql_name = "JSONExtractUInt"]
+    fn json_extract_uint<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `JSONExtractStringCaseInsensitive(json, key)`.
+    #[sql_name = "JSONExtractStringCaseInsensitive"]
+    fn json_extract_string_ci<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `JSONExtractIntCaseInsensitive(json, key)`.
+    #[sql_name = "JSONExtractIntCaseInsensitive"]
+    fn json_extract_int_ci<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `JSONExtractRawCaseInsensitive(json, key)`.
+    #[sql_name = "JSONExtractRawCaseInsensitive"]
+    fn json_extract_raw_ci<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `JSONHas(json, key)`.
+    #[sql_name = "JSONHas"]
+    fn json_has<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `JSONLength(json)`.
+    #[sql_name = "JSONLength"]
+    fn json_length<Json: SqlType + SingleValue>(json: Json) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `JSON_VALUE(json, path)`.
+    #[sql_name = "JSON_VALUE"]
+    fn json_value<Json: SqlType + SingleValue>(json: Json, path: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `JSON_QUERY(json, path)`.
+    #[sql_name = "JSON_QUERY"]
+    fn json_query<Json: SqlType + SingleValue>(json: Json, path: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `JSON_EXISTS(json, path)`.
+    #[sql_name = "JSON_EXISTS"]
+    fn json_exists<Json: SqlType + SingleValue>(json: Json, path: diesel::sql_types::Text) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `isValidJSON(json)`.
+    #[sql_name = "isValidJSON"]
+    fn is_valid_json<Json: SqlType + SingleValue>(json: Json) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `simpleJSONExtractString(json, field_name)`.
+    #[sql_name = "simpleJSONExtractString"]
+    fn simple_json_extract_string<Json: SqlType + SingleValue>(json: Json, field_name: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `simpleJSONExtractInt(json, field_name)`.
+    #[sql_name = "simpleJSONExtractInt"]
+    fn simple_json_extract_int<Json: SqlType + SingleValue>(json: Json, field_name: diesel::sql_types::Text) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `simpleJSONExtractFloat(json, field_name)`.
+    #[sql_name = "simpleJSONExtractFloat"]
+    fn simple_json_extract_float<Json: SqlType + SingleValue>(json: Json, field_name: diesel::sql_types::Text) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `simpleJSONHas(json, field_name)`.
+    #[sql_name = "simpleJSONHas"]
+    fn simple_json_has<Json: SqlType + SingleValue>(json: Json, field_name: diesel::sql_types::Text) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {

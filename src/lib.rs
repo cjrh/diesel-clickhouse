@@ -44,12 +44,14 @@
 
 mod aggregates;
 mod backend;
+mod cast;
 mod clauses;
 mod ddl;
 mod functions;
 mod grouping;
 mod higher_order;
 mod joins;
+mod json;
 mod operators;
 mod ordering;
 mod serialize;
@@ -63,6 +65,9 @@ pub use aggregates::{
     quantiles, quantiles_timing, top_k,
 };
 pub use backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, to_sql};
+pub use cast::{
+    CastFunction, accurate_cast, accurate_cast_or_default, accurate_cast_or_null, cast,
+};
 pub use clauses::{
     ArrayJoin, ArrayJoinKind, ClickHouseQueryDsl, Final, Format, FormattedQuery, IntoOutfileQuery,
     LimitBy, LimitWithTies, NoSampleOffset, NoWithBindings, OutfileCompression, OutfileMode,
@@ -90,17 +95,23 @@ pub use functions::{
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array,
     group_array_if, group_array_merge, group_array_state, has, has_all, has_any, hex, if_, int_div,
     ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    json_extract_bool, json_extract_float, json_extract_int, json_extract_raw, json_extract_string,
-    l1_distance, l1_norm, l2_distance, l2_norm, least, length, linf_distance, linf_norm, lower,
-    map_contains, map_from_arrays, map_keys, map_values, max_if, max_merge, max_state, min_if,
-    min_merge, min_state, not_empty, position, regexp_match, replace_all, round, sip_hash64,
-    substring, sum_if, sum_merge, sum_merge_state, sum_state, to_date, to_date_time,
-    to_date_time64, to_day_of_month, to_float64, to_hour, to_int64, to_ipv4, to_ipv6, to_minute,
-    to_month, to_start_of_day, to_start_of_hour, to_start_of_minute, to_start_of_month,
-    to_start_of_year, to_string, to_uint64, to_unix_timestamp, to_year, top_level_domain,
-    try_base64_decode, unhex, uniq, uniq_exact, uniq_exact_if, uniq_exact_merge, uniq_exact_state,
-    uniq_if, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full, url_protocol,
-    url_query_string, xx_hash64,
+    is_not_null, is_null, is_valid_json, json_exists, json_extract_bool, json_extract_float,
+    json_extract_int, json_extract_int_ci, json_extract_raw, json_extract_raw_ci,
+    json_extract_string, json_extract_string_ci, json_extract_uint, json_has, json_length,
+    json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm, least, length,
+    linf_distance, linf_norm, lower, map_contains, map_from_arrays, map_keys, map_values, max_if,
+    max_merge, max_state, min_if, min_merge, min_state, not_empty, position, regexp_match,
+    replace_all, round, simple_json_extract_float, simple_json_extract_int,
+    simple_json_extract_string, simple_json_has, sip_hash64, substring, sum_if, sum_merge,
+    sum_merge_state, sum_state, to_bool, to_date, to_date_time, to_date_time64, to_day_of_month,
+    to_float32, to_float64, to_float64_or_null, to_float64_or_zero, to_hour, to_int8, to_int16,
+    to_int32, to_int32_or_null, to_int64, to_int64_or_null, to_int64_or_zero, to_int128, to_int256,
+    to_ipv4, to_ipv6, to_minute, to_month, to_start_of_day, to_start_of_hour, to_start_of_minute,
+    to_start_of_month, to_start_of_year, to_string, to_uint8, to_uint16, to_uint32,
+    to_uint32_or_null, to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, to_uint256,
+    to_unix_timestamp, to_year, top_level_domain, try_base64_decode, unhex, uniq, uniq_exact,
+    uniq_exact_if, uniq_exact_merge, uniq_exact_state, uniq_if, uniq_merge, uniq_state, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, xx_hash64,
 };
 pub use grouping::{
     GroupByAll, GroupByModifier, GroupByModifierKind, Grouping, GroupingSets, cube, group_by_all,
@@ -113,6 +124,12 @@ pub use higher_order::{
 pub use joins::{
     ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinKind, JoinModifier, JoinOn,
     JoinStrictness, JoinUsing, clickhouse_join,
+};
+pub use json::{
+    JsonPathFunction, JsonPathSegment, json_extract_bool_path, json_extract_float_path,
+    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci_path,
+    json_extract_raw_path, json_extract_string_ci_path, json_extract_string_path,
+    json_extract_uint_path,
 };
 pub use operators::{GlobalIn, GlobalInDsl, NotGlobalIn, NotGlobalInDsl};
 pub use ordering::{FillBound, NoFillBound, WithFill, with_fill};
