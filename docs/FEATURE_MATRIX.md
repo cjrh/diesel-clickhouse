@@ -26,17 +26,20 @@ Legend:
 | ✅ | Unsigned integers | `UInt8`, `UInt16`, `UInt32`, `UInt64` |
 | ✅ | Signed ClickHouse-only integer | `Int8` |
 | ✅ | `DateTime64` | `DateTime64` |
+| ✅ | `BFloat16` | `BFloat16`, `DataType::BFloat16` |
 | ✅ | `UUID` | `Uuid` |
 | ✅ | `JSON` marker | `Json` |
 | ✅ | `Array(T)` | `Array<Text>` |
 | ✅ | `Map(K, V)` | `Map<Text, Text>` |
 | ✅ | `LowCardinality(T)` | `LowCardinality<Text>` |
 | ✅ | `Nothing` | `Nothing` |
+| ✅ 🧪 | Aggregate state values | `AggregateFunction<T>`, DDL `DataType::aggregate_function("sum", [DataType::Float64])` |
+| ✅ 🧪 | Vector embeddings | `Array<Float>`/`Array<Double>` columns, `vector_f32([..])`, `vector_f64([..])` |
 | ➡️ | Nullable values | Diesel's `Nullable<T>` |
-| ⬜ | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256` |
-| ⬜ | Decimal families | `Decimal32`, `Decimal64`, `Decimal128`, `Decimal256` |
-| ⬜ | Tuple / Nested / Enum | `Tuple<...>`, `Nested<...>`, `Enum8`, `Enum16` |
-| ⬜ | Network / Geo / semi-structured types | `IPv4`, `IPv6`, `Point`, `Ring`, `Dynamic`, `Variant` |
+| ✅ 🧪 | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256`; DDL `DataType::{UInt128, UInt256, Int128, Int256}` |
+| ✅ 🧪 | Decimal families | `Decimal32<S>`, `Decimal64<S>`, `Decimal128<S>`, `Decimal256<S>`; DDL `DataType::decimal64(4)` |
+| ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>`, `Nested<...>`, `Enum8`, `Enum16`; DDL `DataType::tuple(...)`, `DataType::nested(...)`, `DataType::enum8(...)` |
+| 🚧 | Network / Geo / semi-structured types | `IPv4`, `IPv6` implemented; `Point`, `Ring`, `Dynamic`, `Variant` planned |
 
 ## SELECT source modifiers and clauses
 
@@ -81,10 +84,10 @@ Legend:
 | Status | Feature | Example DSL | Notes |
 | --- | --- | --- | --- |
 | ➡️ | ANSI joins | Diesel `.inner_join`, `.left_join` | Need ClickHouse examples and live tests. |
-| ⬜ | `GLOBAL JOIN` | planned join source wrapper | Similar to `GLOBAL IN`, but for joins. |
-| ⬜ | Join strictness | planned `any_inner_join`, `all_left_join`, `asof_join` | ClickHouse `[GLOBAL] [ANY|ALL|ASOF] [INNER|LEFT|...] JOIN`. |
-| ⬜ | `SEMI` / `ANTI` joins | planned join source wrappers | ClickHouse-specific join kinds. |
-| ⬜ | `USING` helper | planned typed/raw column-list helper | Diesel mostly models `ON`; ClickHouse users often use `USING`. |
+| ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; raw select expressions currently required. |
+| ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse `[GLOBAL] [ANY|ALL|ASOF] [INNER|LEFT|...] JOIN`. |
+| ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
+| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | Diesel table columns in `select` are not yet selectable from custom join sources; use `sql::<...>(...)`. |
 
 ## Operators and predicates
 
@@ -106,8 +109,21 @@ Legend:
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains` | `mapApply`, `mapFilter`, `mapFromArrays`, subscript helpers |
 | ✅ 🧪 | JSON | `json_extract_string`, `json_extract_int`, `json_extract_float`, `json_extract_bool`, `json_extract_raw` | case-insensitive variants, paths, dynamic JSON subcolumns |
 | ✅ 🧪 | Strings | `lower`, `upper`, `substring`, `position`, `replace_all`, `concat`, `regexp_match` | more regexp/search variants, token functions |
-| ⬜ | URL/IP/encoding/hash | planned | common analytics functions. |
+| ✅ 🧪 | URL/IP/encoding/hash | `domain`, `domain_without_www`, `top_level_domain`, `url_path`, `base64_encode`, `hex`, `city_hash64`, `to_ipv4`, `is_ipv6_string` | More specialized variants can be added by demand. |
+| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))`, `cosine_distance`, `l1_distance`, `linf_distance`, `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int64`, `to_uint64`, `to_float64`, `to_string` | complete `toUInt*`/`toInt*` families, `CAST`, `accurateCast*` |
+
+## Vector search
+
+ClickHouse vector search stores embeddings in array columns and orders by distance functions for exact search. Approximate search uses MergeTree `vector_similarity` skipping indexes. Reference docs: <https://clickhouse.com/docs/knowledgebase/vector-search> and <https://clickhouse.com/docs/engines/table-engines/mergetree-family/annindexes>.
+
+| Status | Feature | Example DSL | Notes |
+| --- | --- | --- | --- |
+| ✅ 🧪 | Vector literals | `vector_f32([1.0, 0.0])`, `vector_f64([1.0, 2.0])` | Render as ClickHouse array literals. |
+| ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
+| ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536).distance(VectorDistanceFunction::CosineDistance))` | Render-tested; live fixture keeps exact search portable across server builds. |
+| ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
+| ⬜ | Binary reference-vector parameter helpers | planned `reinterpret(binary, Array(Float32))` helper | Useful for large 1536/3072-dimension embeddings. |
 
 ## Aggregate functions and combinators
 
@@ -121,7 +137,7 @@ Legend:
 | ✅ 🧪 | `topK` | `top_k(10, x)` |
 | ✅ | Any-value aggregates | `any_value(x)`, `any_last(x)` |
 | ⬜ | General aggregate combinator builder | planned `sum().if_(pred).or_null()`-style API | Could reduce one-off functions. |
-| ⬜ | State/merge combinators | `sumState`, `sumMerge`, etc. | Needed for materialized views/aggregating engines. |
+| ✅ 🧪 | State/merge combinators | `sum_state(x)`, `sum_merge(state)`, `count_state()`, `uniq_exact_merge(state)`, `finalize_aggregation(state)` | Includes `AggregateFunction<T>` type marker and DDL type rendering. |
 | ⬜ | More approximate/statistical aggregates | `quantileTiming`, `quantileDeterministic`, `corr`, `covar*`, `histogram` | Add by demand. |
 
 ## Window functions
@@ -133,19 +149,19 @@ Legend:
 | ✅ | Value window functions | `first_value(expr).over(...)`, `last_value(expr).over(...)` |
 | ✅ 🧪 | Window `.over(...)` / named `.over_window(...)` | `function.over(partition_by(...).order_by(...))` |
 | ✅ 🧪 | Named `WINDOW` clause | `query.window("w", partition_by(...).order_by(...))` |
-| ⬜ | Frame variants beyond current row | planned rows/range preceding/following helpers |
+| ✅ 🧪 | Frame variants beyond current row | `.rows_between_preceding_and_following(1, 1)`, `.range_between_preceding_and_current_row(1)`, `.rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2))` |
 
 ## DDL and table engines
 
 | Status | Feature | Example DSL |
 | --- | --- | --- |
-| ⬜ | `CREATE TABLE` builder | planned `create_table("events").column(...).engine(...)` |
-| ⬜ | MergeTree family engines | planned `MergeTree::new().order_by(...).partition_by(...)` |
-| ⬜ | Engine modifiers | planned `ttl`, `settings`, `sample_by`, `primary_key` |
-| ⬜ | Column codecs/default/materialized/alias | planned column-definition builders |
-| ⬜ | Secondary indexes/projections | planned DDL fragments |
-| ⬜ | Materialized views | planned create-view builders |
-| ⬜ | `ALTER TABLE` helpers | planned mutations, partitions, TTL/materialize index helpers |
+| ✅ 🧪 | `CREATE TABLE` builder | `create_table("events").column(...).engine(...)` |
+| ✅ 🧪 | MergeTree family engines | `merge_tree().order_by([...])`, `replacing_merge_tree()` |
+| ✅ 🧪 | Engine modifiers | `.partition_by(...)`, `.primary_key(...)`, `.order_by(...)`, `.sample_by(...)`, `.ttl(...)`, `.setting(...)` |
+| ✅ 🧪 | Column codecs/default/materialized/alias | `Column::new(...).default_expr(...)`, `.materialized_expr(...)`, `.alias_expr(...)`, `.codec(...)` |
+| 🚧 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)` implemented; generic custom indexes available; projections planned |
+| ✅ 🧪 | Materialized views | `create_materialized_view("events_mv").to("target").as_select(query)` |
+| 🚧 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`, `.rename_column(...)`, `.add_index(...)`, `.materialize_index(...)` | Column/index lifecycle and `MODIFY TTL` implemented; mutations and partitions planned. |
 
 ## Test policy
 

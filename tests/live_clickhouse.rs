@@ -19,12 +19,19 @@ use testcontainers_modules::{
 };
 
 use diesel_clickhouse::{
-    ClickHouseQueryDsl, OverDsl, Setting, abs, ceil, concat, count_if, date_diff, dense_rank,
-    final_table, floor, greatest, group_by_all, grouping_sets, json_extract_int, lag_in_frame,
-    least, length, lower, map_contains, max_if, min_if, partition_by, position, prewhere, quantile,
-    quantile_exact, quantiles, rank, regexp_match, replace_all, rollup, round, row_number,
-    sample_offset, substring, to_date_time, to_float64, to_int64, to_sql, to_string, to_uint64,
-    top_k, uniq_exact_if, upper, with_fill,
+    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, NestedField, OverDsl, Setting,
+    TableEngine, TableIndex, abs, alter_table, base64_decode, base64_encode, ceil, city_hash64,
+    concat, count_if, count_merge, create_materialized_view, create_table, cut_query_string,
+    date_diff, dense_rank, domain, domain_without_www, farm_fingerprint64, final_table,
+    finalize_aggregation, first_significant_subdomain, floor, greatest, group_by_all,
+    grouping_sets, hex, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, json_extract_int, l2_distance, lag_in_frame, least, length, lower,
+    map_contains, max_if, min_if, partition_by, position, prewhere, quantile, quantile_exact,
+    quantiles, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number,
+    sample_offset, sip_hash64, substring, sum_merge, sum_state, to_date_time, to_float64, to_int64,
+    to_ipv4, to_ipv6, to_sql, to_string, to_uint64, top_k, top_level_domain, try_base64_decode,
+    unhex, uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path, url_path_full,
+    url_protocol, url_query_string, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -43,6 +50,57 @@ diesel::table! {
         tags -> Array<Text>,
         attrs -> Map<Text, Text>,
         payload -> Text,
+    }
+}
+
+diesel::table! {
+    #[sql_name = "diesel_clickhouse_tenants"]
+    tenants (tenant_id) {
+        tenant_id -> Text,
+        plan -> Text,
+    }
+}
+
+diesel::table! {
+    #[sql_name = "diesel_clickhouse_tenant_rates"]
+    tenant_rates (tenant_id, effective_at) {
+        tenant_id -> Text,
+        effective_at -> Timestamp,
+        rate -> Double,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    #[sql_name = "diesel_clickhouse_aggregate_states"]
+    aggregate_states (state_key) {
+        state_key -> UInt64,
+        latency_sum -> AggregateFunction<Double>,
+        event_count -> AggregateFunction<BigInt>,
+        exact_ids -> AggregateFunction<BigInt>,
+    }
+}
+
+diesel::table! {
+    #[sql_name = "diesel_clickhouse_mv_source"]
+    mv_source (id) {
+        id -> BigInt,
+        tenant_id -> Text,
+        success -> Bool,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    #[sql_name = "diesel_clickhouse_image_vectors"]
+    image_vectors (id) {
+        id -> BigInt,
+        caption -> Text,
+        embedding -> Array<Float>,
     }
 }
 
@@ -74,6 +132,14 @@ async fn start_clickhouse() -> TestResult<ClickHouseFixture> {
 async fn setup(client: &clickhouse::Client) -> TestResult<()> {
     let statements = [
         "DROP TABLE IF EXISTS diesel_clickhouse_events",
+        "DROP TABLE IF EXISTS diesel_clickhouse_tenants",
+        "DROP TABLE IF EXISTS diesel_clickhouse_tenant_rates",
+        "DROP TABLE IF EXISTS diesel_clickhouse_aggregate_states",
+        "DROP TABLE IF EXISTS diesel_clickhouse_mv",
+        "DROP TABLE IF EXISTS diesel_clickhouse_mv_target",
+        "DROP TABLE IF EXISTS diesel_clickhouse_mv_source",
+        "DROP TABLE IF EXISTS diesel_clickhouse_image_vectors",
+        "DROP TABLE IF EXISTS diesel_clickhouse_type_showcase",
         "CREATE TABLE diesel_clickhouse_events (
             id UInt64,
             tenant_id String,
@@ -93,6 +159,24 @@ async fn setup(client: &clickhouse::Client) -> TestResult<()> {
             (4, 'beta', '2024-01-01 00:15:00', true, 40.0, ['paid', 'desktop'], map('country', 'DE', 'plan', 'pro'), '{"score": 40, "country": "DE"}'),
             (5, 'beta', '2024-01-01 00:25:00', true, 50.0, ['mobile'], map('country', 'DE', 'plan', 'free'), '{"score": 50, "country": "DE"}'),
             (6, 'beta', '2024-01-01 01:35:00', false, 60.0, ['trial'], map('country', 'FR', 'plan', 'free'), '{"score": 60, "country": "FR"}')"#,
+        "CREATE TABLE diesel_clickhouse_tenants (
+            tenant_id String,
+            plan String
+        ) ENGINE = Memory",
+        "INSERT INTO diesel_clickhouse_tenants VALUES
+            ('acme', 'enterprise'),
+            ('beta', 'starter'),
+            ('gamma', 'trial')",
+        "CREATE TABLE diesel_clickhouse_tenant_rates (
+            tenant_id String,
+            effective_at DateTime,
+            rate Float64
+        ) ENGINE = MergeTree
+        ORDER BY (tenant_id, effective_at)",
+        "INSERT INTO diesel_clickhouse_tenant_rates VALUES
+            ('acme', '2024-01-01 00:00:00', 1.0),
+            ('acme', '2024-01-01 01:00:00', 2.0),
+            ('beta', '2024-01-01 00:00:00', 3.0)",
     ];
 
     for statement in statements {
@@ -108,6 +192,352 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
 
     let fixture = start_clickhouse().await?;
     setup(&fixture.client).await?;
+
+    let ddl = create_table("diesel_clickhouse_ddl_events")
+        .if_not_exists()
+        .column("id", DataType::UInt64)
+        .column("tenant_id", DataType::low_cardinality(DataType::String))
+        .column("created_at", DataType::DateTime)
+        .column_def(Column::new("created_date", DataType::Date).alias_expr("toDate(created_at)"))
+        .column("success", DataType::Bool)
+        .column("latency_ms", DataType::Float64)
+        .engine(
+            replacing_merge_tree()
+                .partition_by(["toDate(created_at)"])
+                .primary_key(["tenant_id", "id"])
+                .order_by(["tenant_id", "id"])
+                .sample_by("id")
+                .ttl("created_at + INTERVAL 7 DAY")
+                .setting("index_granularity", 8192_i64),
+        );
+    fixture
+        .client
+        .query("DROP TABLE IF EXISTS diesel_clickhouse_ddl_events")
+        .execute()
+        .await?;
+    fixture.client.query(&to_sql(&ddl)?).execute().await?;
+    fixture
+        .client
+        .query("INSERT INTO diesel_clickhouse_ddl_events (id, tenant_id, created_at, success, latency_ms) VALUES (1, 'acme', '2024-01-01 00:00:00', true, 12.5)")
+        .execute()
+        .await?;
+    let ddl_row: (String, u64, String) = fixture
+        .client
+        .query("SELECT tenant_id, count(), toString(any(created_date)) FROM diesel_clickhouse_ddl_events GROUP BY tenant_id")
+        .fetch_one()
+        .await?;
+    assert_eq!(ddl_row, ("acme".to_string(), 1, "2024-01-01".to_string()));
+
+    let type_showcase_ddl = create_table("diesel_clickhouse_type_showcase")
+        .column("big_signed", DataType::Int128)
+        .column("huge_signed", DataType::Int256)
+        .column("big_unsigned", DataType::UInt128)
+        .column("huge_unsigned", DataType::UInt256)
+        .column("amount32", DataType::decimal32(2))
+        .column("amount64", DataType::decimal64(4))
+        .column("amount128", DataType::decimal128(8))
+        .column("amount256", DataType::decimal256(12))
+        .column("amount", DataType::decimal(18, 6))
+        .column("status", DataType::enum8([("draft", 1), ("published", 2)]))
+        .column("kind", DataType::enum16([("organic", 100), ("paid", 200)]))
+        .column(
+            "dimensions",
+            DataType::tuple([DataType::String, DataType::UInt64, DataType::Float64]),
+        )
+        .column(
+            "attributes",
+            DataType::nested([
+                NestedField::new("key", DataType::String),
+                NestedField::new("value", DataType::String),
+            ]),
+        )
+        .engine(TableEngine::memory());
+    fixture
+        .client
+        .query(&to_sql(&type_showcase_ddl)?)
+        .execute()
+        .await?;
+    let type_showcase_exists: u64 = fixture
+        .client
+        .query("SELECT count() FROM system.tables WHERE database = currentDatabase() AND name = 'diesel_clickhouse_type_showcase'")
+        .fetch_one()
+        .await?;
+    assert_eq!(type_showcase_exists, 1);
+
+    let aggregate_states_ddl = create_table("diesel_clickhouse_aggregate_states")
+        .column("state_key", DataType::UInt64)
+        .column(
+            "latency_sum",
+            DataType::aggregate_function("sum", [DataType::Float64]),
+        )
+        .column("event_count", DataType::aggregate_function("count", []))
+        .column(
+            "exact_ids",
+            DataType::aggregate_function("uniqExact", [DataType::UInt64]),
+        )
+        .engine(TableEngine::custom(
+            "AggregatingMergeTree ORDER BY state_key",
+        ));
+    fixture
+        .client
+        .query(&to_sql(&aggregate_states_ddl)?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(
+            "INSERT INTO diesel_clickhouse_aggregate_states \
+            SELECT 1, sumState(latency_ms), countState(), uniqExactState(id) \
+            FROM diesel_clickhouse_events",
+        )
+        .execute()
+        .await?;
+    let aggregate_merge_sql = to_sql(&aggregate_states::table.select((
+        sum_merge(aggregate_states::latency_sum),
+        count_merge(aggregate_states::event_count),
+        uniq_exact_merge(aggregate_states::exact_ids),
+    )))?;
+    let aggregate_merge_row: (f64, u64, u64) = fixture
+        .client
+        .query(&aggregate_merge_sql)
+        .fetch_one()
+        .await?;
+    assert_eq!(aggregate_merge_row, (210.0, 6, 6));
+
+    let finalized_sum_sql = to_sql(&events.select(finalize_aggregation(sum_state(latency_ms))))?;
+    let finalized_sum: f64 = fixture.client.query(&finalized_sum_sql).fetch_one().await?;
+    assert_eq!(finalized_sum, 210.0);
+
+    let mv_source_ddl = create_table("diesel_clickhouse_mv_source")
+        .column("id", DataType::Int64)
+        .column("tenant_id", DataType::String)
+        .column("success", DataType::Bool)
+        .engine(TableEngine::custom("MergeTree ORDER BY id"));
+    let mv_target_ddl = create_table("diesel_clickhouse_mv_target")
+        .column("tenant_id", DataType::String)
+        .column("success_count", DataType::UInt64)
+        .engine(TableEngine::memory());
+    fixture
+        .client
+        .query(&to_sql(&mv_source_ddl)?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(&to_sql(&mv_target_ddl)?)
+        .execute()
+        .await?;
+    let mv_ddl =
+        create_materialized_view("diesel_clickhouse_mv")
+            .to("diesel_clickhouse_mv_target")
+            .as_select(mv_source::table.group_by(mv_source::tenant_id).select(
+                diesel::dsl::sql::<(
+                    diesel::sql_types::Text,
+                    diesel_clickhouse::sql_types::UInt64,
+                )>("tenant_id, countIf(success) AS success_count"),
+            ));
+    fixture.client.query(&to_sql(&mv_ddl)?).execute().await?;
+    fixture
+        .client
+        .query(
+            "INSERT INTO diesel_clickhouse_mv_source VALUES \
+            (1, 'acme', true), \
+            (2, 'acme', false), \
+            (3, 'acme', true), \
+            (4, 'beta', true)",
+        )
+        .execute()
+        .await?;
+    let mv_rows: Vec<(String, u64)> = fixture
+        .client
+        .query(
+            "SELECT tenant_id, success_count \
+            FROM diesel_clickhouse_mv_target \
+            ORDER BY tenant_id",
+        )
+        .fetch_all()
+        .await?;
+    assert_eq!(
+        mv_rows,
+        vec![("acme".to_string(), 2), ("beta".to_string(), 1)]
+    );
+
+    let vector_table_ddl = create_table("diesel_clickhouse_image_vectors")
+        .column("id", DataType::Int64)
+        .column("caption", DataType::String)
+        .column_def(Column::new("embedding", DataType::array(DataType::Float32)).codec("NONE"))
+        .engine(TableEngine::custom("MergeTree ORDER BY id"));
+    fixture
+        .client
+        .query(&to_sql(&vector_table_ddl)?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(
+            "INSERT INTO diesel_clickhouse_image_vectors VALUES \
+            (1, 'dog', [1.0, 0.0]), \
+            (2, 'puppy', [1.1, 0.0]), \
+            (3, 'cat', [0.0, 1.0])",
+        )
+        .execute()
+        .await?;
+    let reference_vector = vector_f32([1.0, 0.0]);
+    let vector_search_sql = to_sql(
+        &image_vectors::table
+            .select((
+                image_vectors::id,
+                image_vectors::caption,
+                to_float64(l2_distance(
+                    image_vectors::embedding,
+                    reference_vector.clone(),
+                )),
+            ))
+            .order(l2_distance(image_vectors::embedding, reference_vector).asc())
+            .limit(2),
+    )?;
+    let vector_rows: Vec<(i64, String, f64)> = fixture
+        .client
+        .query(&vector_search_sql)
+        .bind(2_i64)
+        .fetch_all()
+        .await?;
+    assert_eq!(vector_rows[0].0, 1);
+    assert_eq!(vector_rows[0].1, "dog");
+    assert!(vector_rows[0].2.abs() < f64::EPSILON);
+    assert_eq!(vector_rows[1].0, 2);
+    assert_eq!(vector_rows[1].1, "puppy");
+    assert!((vector_rows[1].2 - 0.1).abs() < 0.000_001);
+
+    let add_column_sql = to_sql(&alter_table("diesel_clickhouse_events").add_column_after(
+        Column::new("scratch", DataType::UInt64).default_expr("7"),
+        "id",
+    ))?;
+    fixture.client.query(&add_column_sql).execute().await?;
+    let scratch_sum: u64 = fixture
+        .client
+        .query("SELECT sum(scratch) FROM diesel_clickhouse_events")
+        .fetch_one()
+        .await?;
+    assert_eq!(scratch_sum, 42);
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_events").rename_column("scratch", "scratch2"),
+        )?)
+        .execute()
+        .await?;
+    let scratch_sum_renamed: u64 = fixture
+        .client
+        .query("SELECT sum(scratch2) FROM diesel_clickhouse_events")
+        .fetch_one()
+        .await?;
+    assert_eq!(scratch_sum_renamed, 42);
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_events").drop_column("scratch2"),
+        )?)
+        .execute()
+        .await?;
+
+    let index = TableIndex::custom("events_id_minmax", "id", "minmax").granularity(1);
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_events").add_index(index),
+        )?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_events")
+                .materialize_index("events_id_minmax")
+                .setting("mutations_sync", 2_i64),
+        )?)
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query(&to_sql(
+            &alter_table("diesel_clickhouse_events").drop_index("events_id_minmax"),
+        )?)
+        .execute()
+        .await?;
+
+    let join_sql = to_sql(
+        &events
+            .clickhouse_join(tenants::table)
+            .global()
+            .any()
+            .inner()
+            .using(["tenant_id"])
+            .select(diesel::dsl::sql::<(
+                diesel::sql_types::BigInt,
+                diesel::sql_types::Text,
+            )>(
+                "`diesel_clickhouse_events`.`id`, `diesel_clickhouse_tenants`.`plan`",
+            ))
+            .order(diesel::dsl::sql::<diesel::sql_types::BigInt>(
+                "`diesel_clickhouse_events`.`id`",
+            )),
+    )?;
+    let join_rows: Vec<(u64, String)> = fixture.client.query(&join_sql).fetch_all().await?;
+    assert_eq!(
+        join_rows,
+        vec![(1, "enterprise".to_string()), (4, "starter".to_string())]
+    );
+
+    let semi_count_sql = to_sql(
+        &events
+            .clickhouse_join(tenants::table)
+            .left()
+            .semi()
+            .using(["tenant_id"])
+            .select(diesel::dsl::sql::<diesel::sql_types::BigInt>(
+                "uniqExact(`diesel_clickhouse_events`.`tenant_id`)",
+            )),
+    )?;
+    let semi_count: u64 = fixture.client.query(&semi_count_sql).fetch_one().await?;
+    assert_eq!(semi_count, 2);
+
+    let anti_sql = to_sql(
+        &tenants::table
+            .clickhouse_join(events)
+            .left()
+            .anti()
+            .using(["tenant_id"])
+            .select(diesel::dsl::sql::<diesel::sql_types::Text>(
+                "`diesel_clickhouse_tenants`.`tenant_id`",
+            )),
+    )?;
+    let anti_tenant: String = fixture.client.query(&anti_sql).fetch_one().await?;
+    assert_eq!(anti_tenant, "gamma");
+
+    let asof_sql = to_sql(
+        &events
+            .clickhouse_join(tenant_rates::table)
+            .asof()
+            .left()
+            .on(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                "`diesel_clickhouse_events`.`tenant_id` = `diesel_clickhouse_tenant_rates`.`tenant_id` AND `diesel_clickhouse_events`.`created_at` >= `diesel_clickhouse_tenant_rates`.`effective_at`",
+            ))
+            .select(diesel::dsl::sql::<(
+                diesel::sql_types::BigInt,
+                diesel::sql_types::Double,
+            )>(
+                "`diesel_clickhouse_events`.`id`, `diesel_clickhouse_tenant_rates`.`rate`",
+            ))
+            .order(diesel::dsl::sql::<diesel::sql_types::BigInt>(
+                "`diesel_clickhouse_events`.`id`",
+            )),
+    )?;
+    let asof_rows: Vec<(u64, f64)> = fixture.client.query(&asof_sql).fetch_all().await?;
+    assert_eq!(
+        asof_rows,
+        vec![(1, 1.0), (2, 1.0), (3, 2.0), (4, 3.0), (5, 3.0), (6, 3.0)]
+    );
 
     let with_sql = to_sql(
         &diesel::select(diesel::dsl::sql::<diesel::sql_types::BigInt>("next_answer"))
@@ -326,6 +756,55 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         vec![(1, 1, 1, 0.0), (2, 2, 2, 10.0), (3, 3, 3, 20.0)]
     );
 
+    let rows_frame_sql = to_sql(
+        &events
+            .select((
+                tenant_id,
+                id,
+                diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)").over(
+                    partition_by(tenant_id)
+                        .order_by(id.asc())
+                        .rows_between_preceding_and_following(1, 1),
+                ),
+            ))
+            .order(tenant_id.asc())
+            .then_order_by(id.asc()),
+    )?;
+    let rows_frame_rows: Vec<(String, u64, f64)> =
+        fixture.client.query(&rows_frame_sql).fetch_all().await?;
+    assert_eq!(
+        rows_frame_rows,
+        vec![
+            ("acme".to_string(), 1, 30.0),
+            ("acme".to_string(), 2, 60.0),
+            ("acme".to_string(), 3, 50.0),
+            ("beta".to_string(), 4, 90.0),
+            ("beta".to_string(), 5, 150.0),
+            ("beta".to_string(), 6, 110.0),
+        ]
+    );
+
+    let range_frame_sql = to_sql(
+        &events
+            .filter(tenant_id.eq("acme"))
+            .select((
+                id,
+                diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)").over(
+                    partition_by(tenant_id)
+                        .order_by(id.asc())
+                        .range_between_preceding_and_current_row(1),
+                ),
+            ))
+            .order(id.asc()),
+    )?;
+    let range_frame_rows: Vec<(u64, f64)> = fixture
+        .client
+        .query(&range_frame_sql)
+        .bind("acme")
+        .fetch_all()
+        .await?;
+    assert_eq!(range_frame_rows, vec![(1, 10.0), (2, 30.0), (3, 50.0)]);
+
     // LIMIT BY + SETTINGS compose after regular Diesel select/order clauses and
     // remain valid when clickhouse-rs appends its RowBinary FORMAT clause.
     let limit_by_query = events
@@ -404,6 +883,127 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         )
     );
 
+    let url_value = "https://www.example.com/path/to?q=1#frag";
+    let url_sql = to_sql(&diesel::select((
+        domain(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        domain_without_www(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        top_level_domain(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        first_significant_subdomain(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        url_path(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        url_query_string(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        url_fragment(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        url_protocol(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+    )))?;
+    let url_row: (
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+        String,
+    ) = fixture
+        .client
+        .query(&url_sql)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .bind(url_value)
+        .fetch_one()
+        .await?;
+    assert_eq!(
+        url_row,
+        (
+            "www.example.com".to_string(),
+            "example.com".to_string(),
+            "com".to_string(),
+            "example".to_string(),
+            "/path/to".to_string(),
+            "q=1".to_string(),
+            "frag".to_string(),
+            "https".to_string(),
+        )
+    );
+
+    let url_extra_sql = to_sql(&diesel::select((
+        url_path_full(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+        cut_query_string(diesel::dsl::sql::<diesel::sql_types::Text>("?")),
+    )))?;
+    let url_extra_row: (String, String) = fixture
+        .client
+        .query(&url_extra_sql)
+        .bind(url_value)
+        .bind(url_value)
+        .fetch_one()
+        .await?;
+    assert_eq!(
+        url_extra_row,
+        (
+            "/path/to?q=1#frag".to_string(),
+            "https://www.example.com/path/to#frag".to_string(),
+        )
+    );
+
+    let encoding_hash_sql = to_sql(&diesel::select((
+        hex(diesel::dsl::sql::<diesel::sql_types::Text>("'A'")),
+        unhex(diesel::dsl::sql::<diesel::sql_types::Text>("'41'")),
+        base64_encode(diesel::dsl::sql::<diesel::sql_types::Text>("'click'")),
+        base64_decode(diesel::dsl::sql::<diesel::sql_types::Text>("'Y2xpY2s='")),
+        to_string(try_base64_decode(
+            diesel::dsl::sql::<diesel::sql_types::Text>("'Y2xpY2s='"),
+        )),
+        city_hash64(diesel::dsl::sql::<diesel::sql_types::Text>("'click'")),
+        sip_hash64(diesel::dsl::sql::<diesel::sql_types::Text>("'click'")),
+        xx_hash64(diesel::dsl::sql::<diesel::sql_types::Text>("'click'")),
+        farm_fingerprint64(diesel::dsl::sql::<diesel::sql_types::Text>("'click'")),
+    )))?;
+    let encoding_hash_row: (String, String, String, String, String, u64, u64, u64, u64) =
+        fixture.client.query(&encoding_hash_sql).fetch_one().await?;
+    assert_eq!(encoding_hash_row.0, "41");
+    assert_eq!(encoding_hash_row.1, "A");
+    assert_eq!(encoding_hash_row.2, "Y2xpY2s=");
+    assert_eq!(encoding_hash_row.3, "click");
+    assert_eq!(encoding_hash_row.4, "click");
+    assert!(encoding_hash_row.5 > 0);
+    assert!(encoding_hash_row.6 > 0);
+    assert!(encoding_hash_row.7 > 0);
+    assert!(encoding_hash_row.8 > 0);
+
+    let ip_sql = to_sql(&diesel::select((
+        to_string(to_ipv4(diesel::dsl::sql::<diesel::sql_types::Text>(
+            "'127.0.0.1'",
+        ))),
+        ipv4_num_to_string(ipv4_string_to_num(diesel::dsl::sql::<
+            diesel::sql_types::Text,
+        >("'127.0.0.1'"))),
+        to_string(to_ipv6(diesel::dsl::sql::<diesel::sql_types::Text>(
+            "'2001:db8::1'",
+        ))),
+        ipv6_num_to_string(to_ipv6(diesel::dsl::sql::<diesel::sql_types::Text>(
+            "'2001:db8::1'",
+        ))),
+        is_ipv4_string(diesel::dsl::sql::<diesel::sql_types::Text>("'127.0.0.1'")),
+        is_ipv6_string(diesel::dsl::sql::<diesel::sql_types::Text>("'2001:db8::1'")),
+    )))?;
+    let ip_row: (String, String, String, String, bool, bool) =
+        fixture.client.query(&ip_sql).fetch_one().await?;
+    assert_eq!(
+        ip_row,
+        (
+            "127.0.0.1".to_string(),
+            "127.0.0.1".to_string(),
+            "2001:db8::1".to_string(),
+            "2001:db8::1".to_string(),
+            true,
+            true,
+        )
+    );
+
     let conversion_sql = to_sql(&events.filter(id.eq(1)).select((
         to_uint64(latency_ms),
         to_int64(success),
@@ -470,6 +1070,41 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .await?;
     assert_eq!(beta_count, 3);
 
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_type_showcase")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_image_vectors")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_mv")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_mv_target")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_mv_source")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_aggregate_states")
+        .execute()
+        .await?;
+    fixture
+        .client
+        .query("DROP TABLE diesel_clickhouse_ddl_events")
+        .execute()
+        .await?;
     fixture
         .client
         .query("DROP TABLE diesel_clickhouse_events")

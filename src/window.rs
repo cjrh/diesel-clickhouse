@@ -174,9 +174,52 @@ pub struct WindowOrder<Expr>(Expr);
 #[derive(Debug, Clone, Copy, Default)]
 pub struct NoWindowFrame;
 
-/// `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RowsBetweenUnboundedPrecedingAndCurrentRow;
+/// Window frame units.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum WindowFrameUnits {
+    /// `ROWS BETWEEN ...` counts physical rows relative to the current row.
+    Rows,
+    /// `RANGE BETWEEN ...` groups rows by distance in the ordering value.
+    Range,
+}
+
+/// One boundary in a ClickHouse window frame.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub enum WindowFrameBound {
+    /// `UNBOUNDED PRECEDING`.
+    UnboundedPreceding,
+    /// `n PRECEDING`.
+    Preceding(u64),
+    /// `CURRENT ROW`.
+    CurrentRow,
+    /// `n FOLLOWING`.
+    Following(u64),
+    /// `UNBOUNDED FOLLOWING`.
+    UnboundedFollowing,
+}
+
+/// `ROWS` or `RANGE` frame clause for a window specification.
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+pub struct WindowFrame {
+    units: WindowFrameUnits,
+    start: WindowFrameBound,
+    end: WindowFrameBound,
+}
+
+/// Backwards-compatible name for the original frame helper return type.
+pub type RowsBetweenUnboundedPrecedingAndCurrentRow = WindowFrame;
+
+impl WindowFrameBound {
+    /// Build `n PRECEDING`.
+    pub fn preceding(offset: u64) -> Self {
+        Self::Preceding(offset)
+    }
+
+    /// Build `n FOLLOWING`.
+    pub fn following(offset: u64) -> Self {
+        Self::Following(offset)
+    }
+}
 
 impl<Partition, Order, Frame> WindowSpec<Partition, Order, Frame> {
     /// Add or replace the `ORDER BY` expression.
@@ -191,14 +234,112 @@ impl<Partition, Order, Frame> WindowSpec<Partition, Order, Frame> {
         }
     }
 
+    /// Add a `ROWS BETWEEN start AND end` frame.
+    pub fn rows_between(
+        self,
+        start: WindowFrameBound,
+        end: WindowFrameBound,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.with_frame(WindowFrame {
+            units: WindowFrameUnits::Rows,
+            start,
+            end,
+        })
+    }
+
+    /// Add a `RANGE BETWEEN start AND end` frame.
+    pub fn range_between(
+        self,
+        start: WindowFrameBound,
+        end: WindowFrameBound,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.with_frame(WindowFrame {
+            units: WindowFrameUnits::Range,
+            start,
+            end,
+        })
+    }
+
     /// Add `ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
     pub fn rows_between_unbounded_preceding_and_current_row(
         self,
-    ) -> WindowSpec<Partition, Order, RowsBetweenUnboundedPrecedingAndCurrentRow> {
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.rows_between(
+            WindowFrameBound::UnboundedPreceding,
+            WindowFrameBound::CurrentRow,
+        )
+    }
+
+    /// Add `ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING`.
+    pub fn rows_between_unbounded_preceding_and_unbounded_following(
+        self,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.rows_between(
+            WindowFrameBound::UnboundedPreceding,
+            WindowFrameBound::UnboundedFollowing,
+        )
+    }
+
+    /// Add `ROWS BETWEEN n PRECEDING AND CURRENT ROW`.
+    pub fn rows_between_preceding_and_current_row(
+        self,
+        preceding: u64,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.rows_between(
+            WindowFrameBound::Preceding(preceding),
+            WindowFrameBound::CurrentRow,
+        )
+    }
+
+    /// Add `ROWS BETWEEN n PRECEDING AND m FOLLOWING`.
+    pub fn rows_between_preceding_and_following(
+        self,
+        preceding: u64,
+        following: u64,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.rows_between(
+            WindowFrameBound::Preceding(preceding),
+            WindowFrameBound::Following(following),
+        )
+    }
+
+    /// Add `ROWS BETWEEN CURRENT ROW AND n FOLLOWING`.
+    pub fn rows_between_current_row_and_following(
+        self,
+        following: u64,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.rows_between(
+            WindowFrameBound::CurrentRow,
+            WindowFrameBound::Following(following),
+        )
+    }
+
+    /// Add `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+    pub fn range_between_unbounded_preceding_and_current_row(
+        self,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.range_between(
+            WindowFrameBound::UnboundedPreceding,
+            WindowFrameBound::CurrentRow,
+        )
+    }
+
+    /// Add `RANGE BETWEEN n PRECEDING AND CURRENT ROW`.
+    pub fn range_between_preceding_and_current_row(
+        self,
+        preceding: u64,
+    ) -> WindowSpec<Partition, Order, WindowFrame> {
+        self.range_between(
+            WindowFrameBound::Preceding(preceding),
+            WindowFrameBound::CurrentRow,
+        )
+    }
+
+    fn with_frame<NewFrame>(self, frame: NewFrame) -> WindowSpec<Partition, Order, NewFrame> {
         WindowSpec {
             partition: self.partition,
             order: self.order,
-            frame: RowsBetweenUnboundedPrecedingAndCurrentRow,
+            frame,
         }
     }
 }
@@ -435,14 +576,39 @@ impl WindowSpecPart for NoWindowFrame {
     }
 }
 
-impl WindowSpecPart for RowsBetweenUnboundedPrecedingAndCurrentRow {
+impl WindowSpecPart for WindowFrame {
     fn is_empty(&self) -> bool {
         false
     }
 
     fn walk_part<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
-        out.push_sql("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW");
+        out.push_sql(match self.units {
+            WindowFrameUnits::Rows => "ROWS BETWEEN ",
+            WindowFrameUnits::Range => "RANGE BETWEEN ",
+        });
+        push_frame_bound(&mut out, self.start);
+        out.push_sql(" AND ");
+        push_frame_bound(&mut out, self.end);
         Ok(())
+    }
+}
+
+fn push_frame_bound<DB>(out: &mut AstPass<'_, '_, DB>, bound: WindowFrameBound)
+where
+    DB: Backend,
+{
+    match bound {
+        WindowFrameBound::UnboundedPreceding => out.push_sql("UNBOUNDED PRECEDING"),
+        WindowFrameBound::Preceding(offset) => {
+            out.push_sql(&offset.to_string());
+            out.push_sql(" PRECEDING");
+        }
+        WindowFrameBound::CurrentRow => out.push_sql("CURRENT ROW"),
+        WindowFrameBound::Following(offset) => {
+            out.push_sql(&offset.to_string());
+            out.push_sql(" FOLLOWING");
+        }
+        WindowFrameBound::UnboundedFollowing => out.push_sql("UNBOUNDED FOLLOWING"),
     }
 }
 

@@ -14,7 +14,7 @@ use diesel::serialize::{self, IsNull, Output, ToSql};
 use diesel::sql_types::{BigInt, Bool, Double, Float, Integer, SmallInt};
 
 use crate::backend::ClickHouse;
-use crate::types::{Int8, UInt8, UInt16, UInt32, UInt64};
+use crate::types::{Int8, Int128, UInt8, UInt16, UInt32, UInt64, UInt128};
 
 macro_rules! impl_textual_to_sql {
     ($rust:ty, $sql:ty) => {
@@ -40,10 +40,12 @@ impl_textual_to_sql!(i8, Int8);
 impl_textual_to_sql!(i16, SmallInt);
 impl_textual_to_sql!(i32, Integer);
 impl_textual_to_sql!(i64, BigInt);
+impl_textual_to_sql!(i128, Int128);
 impl_textual_to_sql!(u8, UInt8);
 impl_textual_to_sql!(u16, UInt16);
 impl_textual_to_sql!(u32, UInt32);
 impl_textual_to_sql!(u64, UInt64);
+impl_textual_to_sql!(u128, UInt128);
 impl_textual_to_sql!(f32, Float);
 impl_textual_to_sql!(f64, Double);
 
@@ -76,9 +78,11 @@ impl_parse_from_sql!(i8, Int8);
 impl_parse_from_sql!(i16, SmallInt);
 impl_parse_from_sql!(i32, Integer);
 impl_parse_from_sql!(i64, BigInt);
+impl_parse_from_sql!(i128, Int128);
 impl_parse_from_sql!(u8, UInt8);
 impl_parse_from_sql!(u16, UInt16);
 impl_parse_from_sql!(u32, UInt32);
 impl_parse_from_sql!(u64, UInt64);
+impl_parse_from_sql!(u128, UInt128);
 impl_parse_from_sql!(f32, Float);
 impl_parse_from_sql!(f64, Double);

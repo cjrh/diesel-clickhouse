@@ -7,7 +7,7 @@
 use diesel::expression::functions::define_sql_function;
 use diesel::sql_types::{SingleValue, SqlType};
 
-use crate::types::Array;
+use crate::types::{AggregateFunction, Array};
 
 define_sql_function! {
     /// `toDate(expr)`.
@@ -325,6 +325,343 @@ define_sql_function! {
     /// `JSONExtractRaw(json, key)`.
     #[sql_name = "JSONExtractRaw"]
     fn json_extract_raw<Json: SqlType + SingleValue>(json: Json, key: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `domain(url)`.
+    #[sql_name = "domain"]
+    fn domain<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `domainWithoutWWW(url)`.
+    #[sql_name = "domainWithoutWWW"]
+    fn domain_without_www<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `topLevelDomain(url)`.
+    #[sql_name = "topLevelDomain"]
+    fn top_level_domain<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `firstSignificantSubdomain(url)`.
+    #[sql_name = "firstSignificantSubdomain"]
+    fn first_significant_subdomain<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `path(url)`.
+    #[sql_name = "path"]
+    fn url_path<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `pathFull(url)`.
+    #[sql_name = "pathFull"]
+    fn url_path_full<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `queryString(url)`.
+    #[sql_name = "queryString"]
+    fn url_query_string<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `fragment(url)`.
+    #[sql_name = "fragment"]
+    fn url_fragment<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `protocol(url)`.
+    #[sql_name = "protocol"]
+    fn url_protocol<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `cutQueryString(url)`.
+    #[sql_name = "cutQueryString"]
+    fn cut_query_string<T: SqlType + SingleValue>(url: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `hex(expr)`.
+    #[sql_name = "hex"]
+    fn hex<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `unhex(expr)`.
+    #[sql_name = "unhex"]
+    fn unhex<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `base64Encode(expr)`.
+    #[sql_name = "base64Encode"]
+    fn base64_encode<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `base64Decode(expr)`.
+    #[sql_name = "base64Decode"]
+    fn base64_decode<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `tryBase64Decode(expr)`.
+    #[sql_name = "tryBase64Decode"]
+    fn try_base64_decode<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Nullable<diesel::sql_types::Text>;
+}
+
+define_sql_function! {
+    /// `cityHash64(expr)`.
+    #[sql_name = "cityHash64"]
+    fn city_hash64<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `sipHash64(expr)`.
+    #[sql_name = "sipHash64"]
+    fn sip_hash64<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `xxHash64(expr)`.
+    #[sql_name = "xxHash64"]
+    fn xx_hash64<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `farmFingerprint64(expr)`.
+    #[sql_name = "farmFingerprint64"]
+    fn farm_fingerprint64<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `toIPv4(expr)`.
+    #[sql_name = "toIPv4"]
+    fn to_ipv4<T: SqlType + SingleValue>(expr: T) -> crate::types::IPv4;
+}
+
+define_sql_function! {
+    /// `toIPv6(expr)`.
+    #[sql_name = "toIPv6"]
+    fn to_ipv6<T: SqlType + SingleValue>(expr: T) -> crate::types::IPv6;
+}
+
+define_sql_function! {
+    /// `IPv4StringToNum(expr)`.
+    #[sql_name = "IPv4StringToNum"]
+    fn ipv4_string_to_num<T: SqlType + SingleValue>(expr: T) -> crate::types::UInt32;
+}
+
+define_sql_function! {
+    /// `IPv4NumToString(expr)`.
+    #[sql_name = "IPv4NumToString"]
+    fn ipv4_num_to_string<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `IPv6NumToString(expr)`.
+    #[sql_name = "IPv6NumToString"]
+    fn ipv6_num_to_string<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `isIPv4String(expr)`.
+    #[sql_name = "isIPv4String"]
+    fn is_ipv4_string<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `isIPv6String(expr)`.
+    #[sql_name = "isIPv6String"]
+    fn is_ipv6_string<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
+}
+
+define_sql_function! {
+    /// `L1Distance(vector1, vector2)`.
+    #[sql_name = "L1Distance"]
+    fn l1_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `L2Distance(vector1, vector2)`.
+    #[sql_name = "L2Distance"]
+    fn l2_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `LinfDistance(vector1, vector2)`.
+    #[sql_name = "LinfDistance"]
+    fn linf_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `cosineDistance(vector1, vector2)`.
+    #[sql_name = "cosineDistance"]
+    fn cosine_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `L1Norm(vector)`.
+    #[sql_name = "L1Norm"]
+    fn l1_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `L2Norm(vector)`.
+    #[sql_name = "L2Norm"]
+    fn l2_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `LinfNorm(vector)`.
+    #[sql_name = "LinfNorm"]
+    fn linf_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `countState()`.
+    #[aggregate]
+    #[sql_name = "countState"]
+    fn count_state() -> AggregateFunction<diesel::sql_types::BigInt>;
+}
+
+define_sql_function! {
+    /// `countMerge(state)`.
+    #[aggregate]
+    #[sql_name = "countMerge"]
+    fn count_merge(state: AggregateFunction<diesel::sql_types::BigInt>) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `countMergeState(state)`.
+    #[aggregate]
+    #[sql_name = "countMergeState"]
+    fn count_merge_state(state: AggregateFunction<diesel::sql_types::BigInt>) -> AggregateFunction<diesel::sql_types::BigInt>;
+}
+
+define_sql_function! {
+    /// `sumState(expr)`.
+    #[aggregate]
+    #[sql_name = "sumState"]
+    fn sum_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<T>;
+}
+
+define_sql_function! {
+    /// `sumMerge(state)`.
+    #[aggregate]
+    #[sql_name = "sumMerge"]
+    fn sum_merge<T: SqlType + SingleValue>(state: AggregateFunction<T>) -> T;
+}
+
+define_sql_function! {
+    /// `sumMergeState(state)`.
+    #[aggregate]
+    #[sql_name = "sumMergeState"]
+    fn sum_merge_state<T: SqlType + SingleValue>(state: AggregateFunction<T>) -> AggregateFunction<T>;
+}
+
+define_sql_function! {
+    /// `avgState(expr)`.
+    #[aggregate]
+    #[sql_name = "avgState"]
+    fn avg_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<diesel::sql_types::Double>;
+}
+
+define_sql_function! {
+    /// `avgMerge(state)`.
+    #[aggregate]
+    #[sql_name = "avgMerge"]
+    fn avg_merge(state: AggregateFunction<diesel::sql_types::Double>) -> diesel::sql_types::Double;
+}
+
+define_sql_function! {
+    /// `avgMergeState(state)`.
+    #[aggregate]
+    #[sql_name = "avgMergeState"]
+    fn avg_merge_state(state: AggregateFunction<diesel::sql_types::Double>) -> AggregateFunction<diesel::sql_types::Double>;
+}
+
+define_sql_function! {
+    /// `minState(expr)`.
+    #[aggregate]
+    #[sql_name = "minState"]
+    fn min_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<T>;
+}
+
+define_sql_function! {
+    /// `minMerge(state)`.
+    #[aggregate]
+    #[sql_name = "minMerge"]
+    fn min_merge<T: SqlType + SingleValue>(state: AggregateFunction<T>) -> T;
+}
+
+define_sql_function! {
+    /// `maxState(expr)`.
+    #[aggregate]
+    #[sql_name = "maxState"]
+    fn max_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<T>;
+}
+
+define_sql_function! {
+    /// `maxMerge(state)`.
+    #[aggregate]
+    #[sql_name = "maxMerge"]
+    fn max_merge<T: SqlType + SingleValue>(state: AggregateFunction<T>) -> T;
+}
+
+define_sql_function! {
+    /// `uniqState(expr)`.
+    #[aggregate]
+    #[sql_name = "uniqState"]
+    fn uniq_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<diesel::sql_types::BigInt>;
+}
+
+define_sql_function! {
+    /// `uniqMerge(state)`.
+    #[aggregate]
+    #[sql_name = "uniqMerge"]
+    fn uniq_merge(state: AggregateFunction<diesel::sql_types::BigInt>) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `uniqExactState(expr)`.
+    #[aggregate]
+    #[sql_name = "uniqExactState"]
+    fn uniq_exact_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<diesel::sql_types::BigInt>;
+}
+
+define_sql_function! {
+    /// `uniqExactMerge(state)`.
+    #[aggregate]
+    #[sql_name = "uniqExactMerge"]
+    fn uniq_exact_merge(state: AggregateFunction<diesel::sql_types::BigInt>) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
+    /// `groupArrayState(expr)`.
+    #[aggregate]
+    #[sql_name = "groupArrayState"]
+    fn group_array_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<Array<T>>;
+}
+
+define_sql_function! {
+    /// `groupArrayMerge(state)`.
+    #[aggregate]
+    #[sql_name = "groupArrayMerge"]
+    fn group_array_merge<T: SqlType + SingleValue>(state: AggregateFunction<Array<T>>) -> Array<T>;
+}
+
+define_sql_function! {
+    /// `finalizeAggregation(state)`.
+    #[sql_name = "finalizeAggregation"]
+    fn finalize_aggregation<T: SqlType + SingleValue>(state: AggregateFunction<T>) -> T;
 }
 
 define_sql_function! {

@@ -1,11 +1,23 @@
 use diesel::prelude::*;
 use diesel_clickhouse::{
-    ClickHouseQueryDsl, Format, OverDsl, Setting, abs, ceil, concat, count_if, cube, date_diff,
-    dense_rank, final_table, floor, greatest, group_by_all, grouping, grouping_sets, if_,
-    json_extract_int, lag_in_frame, least, length, lower, map_contains, partition_by, position,
-    prewhere, quantile, quantile_exact, quantiles, rank, regexp_match, replace_all, rollup, round,
-    row_number, sample, sample_offset, substring, to_date_time, to_float64, to_int64, to_sql,
-    to_start_of_hour, to_string, to_uint64, top_k, upper, with_fill, with_totals,
+    ClickHouseJoinDsl, ClickHouseQueryDsl, Column, DataType, Format, NestedField, OverDsl, Setting,
+    TableEngine, TableIndex, VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs,
+    alter_table, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, ceil,
+    city_hash64, concat, cosine_distance, count_if, count_merge, count_merge_state, count_state,
+    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank, domain,
+    domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_array_merge, group_array_state,
+    group_by_all, grouping, grouping_sets, hex, if_, ipv4_num_to_string, ipv4_string_to_num,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, json_extract_int, l1_distance, l1_norm,
+    l2_distance, l2_norm, lag_in_frame, least, length, linf_distance, linf_norm, lower,
+    map_contains, max_merge, max_state, min_merge, min_state, partition_by, position, prewhere,
+    quantile, quantile_exact, quantiles, rank, regexp_match, replace_all, replacing_merge_tree,
+    rollup, round, row_number, sample, sample_offset, sip_hash64, substring, sum_merge,
+    sum_merge_state, sum_state, to_date_time, to_float64, to_int64, to_ipv4, to_ipv6, to_sql,
+    to_start_of_hour, to_string, to_uint64, top_k, top_level_domain, try_base64_decode, unhex,
+    uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path,
+    url_path_full, url_protocol, url_query_string, vector_f32, vector_f64, vector_similarity_index,
+    with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -21,6 +33,32 @@ diesel::table! {
         tags -> Array<Text>,
         attrs -> Map<Text, Text>,
         payload -> Text,
+    }
+}
+
+diesel::table! {
+    tenants (tenant_id) {
+        tenant_id -> Text,
+        plan -> Text,
+    }
+}
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    image_vectors (id) {
+        id -> BigInt,
+        caption -> Text,
+        embedding -> Array<Float>,
+    }
+}
+
+diesel::table! {
+    tenant_rates (tenant_id, effective_at) {
+        tenant_id -> Text,
+        effective_at -> Timestamp,
+        rate -> Double,
     }
 }
 
@@ -140,6 +178,56 @@ fn renders_string_numeric_and_conversion_functions() {
 }
 
 #[test]
+fn renders_url_ip_encoding_and_hash_functions() {
+    use self::events::dsl::*;
+
+    let url_query = events.select((
+        domain(payload),
+        domain_without_www(payload),
+        top_level_domain(payload),
+        first_significant_subdomain(payload),
+        url_path(payload),
+        url_path_full(payload),
+        url_query_string(payload),
+        url_fragment(payload),
+        url_protocol(payload),
+        cut_query_string(payload),
+    ));
+    let encoding_hash_query = events.select((
+        hex(payload),
+        unhex(payload),
+        base64_encode(payload),
+        base64_decode(payload),
+        try_base64_decode(payload),
+        city_hash64(payload),
+        sip_hash64(payload),
+        xx_hash64(payload),
+        farm_fingerprint64(payload),
+    ));
+    let ip_query = events.select((
+        to_string(to_ipv4(payload)),
+        to_string(to_ipv6(payload)),
+        ipv4_num_to_string(ipv4_string_to_num(payload)),
+        ipv6_num_to_string(to_ipv6(payload)),
+        is_ipv4_string(payload),
+        is_ipv6_string(payload),
+    ));
+
+    assert_eq!(
+        to_sql(&url_query).unwrap(),
+        "SELECT domain(`events`.`payload`), domainWithoutWWW(`events`.`payload`), topLevelDomain(`events`.`payload`), firstSignificantSubdomain(`events`.`payload`), path(`events`.`payload`), pathFull(`events`.`payload`), queryString(`events`.`payload`), fragment(`events`.`payload`), protocol(`events`.`payload`), cutQueryString(`events`.`payload`) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&encoding_hash_query).unwrap(),
+        "SELECT hex(`events`.`payload`), unhex(`events`.`payload`), base64Encode(`events`.`payload`), base64Decode(`events`.`payload`), tryBase64Decode(`events`.`payload`), cityHash64(`events`.`payload`), sipHash64(`events`.`payload`), xxHash64(`events`.`payload`), farmFingerprint64(`events`.`payload`) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&ip_query).unwrap(),
+        "SELECT toString(toIPv4(`events`.`payload`)), toString(toIPv6(`events`.`payload`)), IPv4NumToString(IPv4StringToNum(`events`.`payload`)), IPv6NumToString(toIPv6(`events`.`payload`)), isIPv4String(`events`.`payload`), isIPv6String(`events`.`payload`) FROM `events`"
+    );
+}
+
+#[test]
 fn renders_parametric_aggregates() {
     use self::events::dsl::*;
 
@@ -152,6 +240,123 @@ fn renders_parametric_aggregates() {
     assert_eq!(
         to_sql(&query).unwrap(),
         "SELECT quantileExact(0.5)(`events`.`latency_ms`), quantiles(0.25, 0.75)(`events`.`latency_ms`), topK(3)(`events`.`tenant_id`) FROM `events`"
+    );
+}
+
+#[test]
+fn renders_vector_search_helpers_and_index_ddl() {
+    use self::image_vectors::dsl::*;
+
+    let reference = vector_f32([1.0, 0.0, 0.0]);
+    let distance_query = image_vectors
+        .select((
+            id,
+            l2_distance(embedding, reference.clone()),
+            cosine_distance(embedding, reference.clone()),
+            l1_distance(embedding, reference.clone()),
+            linf_distance(embedding, reference.clone()),
+            l2_norm(embedding),
+            l1_norm(embedding),
+            linf_norm(embedding),
+        ))
+        .order(cosine_distance(embedding, reference).asc())
+        .limit(10);
+    let literal_query = diesel::select(l2_distance(vector_f64([1.0, 2.0]), vector_f64([2.0, 4.0])));
+    let ddl = create_table("image_vectors")
+        .column("id", DataType::UInt64)
+        .column("caption", DataType::String)
+        .column_def(Column::new("embedding", DataType::array(DataType::Float32)).codec("NONE"))
+        .index(
+            vector_similarity_index("embedding_idx", "embedding", 3)
+                .distance(VectorDistanceFunction::CosineDistance)
+                .quantization(VectorQuantization::F32)
+                .hnsw_params(32, 128)
+                .granularity(100),
+        )
+        .engine(replacing_merge_tree().order_by(["id"]));
+
+    assert_eq!(
+        to_sql(&distance_query).unwrap(),
+        "SELECT `image_vectors`.`id`, L2Distance(`image_vectors`.`embedding`, [1, 0, 0]), cosineDistance(`image_vectors`.`embedding`, [1, 0, 0]), L1Distance(`image_vectors`.`embedding`, [1, 0, 0]), LinfDistance(`image_vectors`.`embedding`, [1, 0, 0]), L2Norm(`image_vectors`.`embedding`), L1Norm(`image_vectors`.`embedding`), LinfNorm(`image_vectors`.`embedding`) FROM `image_vectors` ORDER BY cosineDistance(`image_vectors`.`embedding`, [1, 0, 0]) ASC LIMIT ?"
+    );
+    assert_eq!(
+        to_sql(&literal_query).unwrap(),
+        "SELECT L2Distance([1, 2], [2, 4])"
+    );
+    assert_eq!(
+        to_sql(&ddl).unwrap(),
+        "CREATE TABLE `image_vectors` (\n    `id` UInt64,\n    `caption` String,\n    `embedding` Array(Float32) CODEC(NONE),\n    INDEX `embedding_idx` embedding TYPE vector_similarity('hnsw', 'cosineDistance', 3, 'f32', 32, 128) GRANULARITY 100\n) ENGINE = ReplacingMergeTree ORDER BY id"
+    );
+}
+
+#[test]
+fn renders_aggregate_state_and_merge_combinators() {
+    use self::events::dsl::*;
+
+    let state_query = events.group_by(tenant_id).select((
+        sum_state(latency_ms),
+        avg_state(latency_ms),
+        min_state(id),
+        max_state(id),
+        count_state(),
+        uniq_state(tenant_id),
+        uniq_exact_state(id),
+        group_array_state(id),
+    ));
+    let merge_query = diesel::select((
+        sum_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::Double>,
+        >("latency_sum")),
+        avg_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::Double>,
+        >("latency_avg")),
+        min_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("min_id")),
+        max_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("max_id")),
+        count_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("event_count")),
+        uniq_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("tenants")),
+        uniq_exact_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("ids")),
+        group_array_merge(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<
+                diesel_clickhouse::sql_types::Array<diesel::sql_types::BigInt>,
+            >,
+        >("ids_array")),
+        finalize_aggregation(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::Double>,
+        >("latency_sum")),
+    ));
+    let merge_state_query = diesel::select((
+        sum_merge_state(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::Double>,
+        >("latency_sum")),
+        avg_merge_state(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::Double>,
+        >("latency_avg")),
+        count_merge_state(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::AggregateFunction<diesel::sql_types::BigInt>,
+        >("event_count")),
+    ));
+
+    assert_eq!(
+        to_sql(&state_query).unwrap(),
+        "SELECT sumState(`events`.`latency_ms`), avgState(`events`.`latency_ms`), minState(`events`.`id`), maxState(`events`.`id`), countState(), uniqState(`events`.`tenant_id`), uniqExactState(`events`.`id`), groupArrayState(`events`.`id`) FROM `events` GROUP BY `events`.`tenant_id`"
+    );
+    assert_eq!(
+        to_sql(&merge_query).unwrap(),
+        "SELECT sumMerge(latency_sum), avgMerge(latency_avg), minMerge(min_id), maxMerge(max_id), countMerge(event_count), uniqMerge(tenants), uniqExactMerge(ids), groupArrayMerge(ids_array), finalizeAggregation(latency_sum)"
+    );
+    assert_eq!(
+        to_sql(&merge_state_query).unwrap(),
+        "SELECT sumMergeState(latency_sum), avgMergeState(latency_avg), countMergeState(event_count)"
     );
 }
 
@@ -285,6 +490,275 @@ fn renders_window_functions_qualify_and_named_windows() {
     assert_eq!(
         to_sql(&named_window_query).unwrap(),
         "SELECT `events`.`tenant_id`, rank() OVER `by_tenant`, dense_rank() OVER (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`latency_ms` DESC), lagInFrame(`events`.`latency_ms`, ?, ?) OVER (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`id` ASC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM `events` WINDOW `by_tenant` AS (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`latency_ms` DESC ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW)"
+    );
+}
+
+#[test]
+fn renders_window_frame_variants() {
+    use self::events::dsl::*;
+
+    let rolling_rows = events.select((
+        id,
+        diesel::dsl::sql::<diesel::sql_types::Double>("sum(`events`.`latency_ms`)").over(
+            partition_by(tenant_id)
+                .order_by(id.asc())
+                .rows_between_preceding_and_following(1, 1),
+        ),
+    ));
+    let trailing_range = events.select((
+        id,
+        diesel::dsl::sql::<diesel::sql_types::Double>("avg(`events`.`latency_ms`)").over(
+            partition_by(tenant_id)
+                .order_by(latency_ms)
+                .range_between_unbounded_preceding_and_current_row(),
+        ),
+    ));
+    let generic_rows = events.select((
+        id,
+        diesel::dsl::sql::<diesel::sql_types::Double>("max(`events`.`latency_ms`)").over(
+            partition_by(tenant_id)
+                .order_by(id)
+                .rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2)),
+        ),
+    ));
+
+    assert_eq!(
+        to_sql(&rolling_rows).unwrap(),
+        "SELECT `events`.`id`, sum(`events`.`latency_ms`) OVER (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`id` ASC ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&trailing_range).unwrap(),
+        "SELECT `events`.`id`, avg(`events`.`latency_ms`) OVER (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`latency_ms` RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM `events`"
+    );
+    assert_eq!(
+        to_sql(&generic_rows).unwrap(),
+        "SELECT `events`.`id`, max(`events`.`latency_ms`) OVER (PARTITION BY `events`.`tenant_id` ORDER BY `events`.`id` ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) FROM `events`"
+    );
+}
+
+#[test]
+fn renders_clickhouse_join_extensions() {
+    use self::events::dsl::*;
+
+    let any_join = events
+        .clickhouse_join(tenants::table)
+        .any()
+        .inner()
+        .on(tenant_id.eq(tenants::tenant_id))
+        .select(diesel::dsl::sql::<(
+            diesel::sql_types::Text,
+            diesel::sql_types::Text,
+        )>("`events`.`tenant_id`, `tenants`.`plan`"));
+    let using_join = events
+        .clickhouse_join(tenants::table)
+        .global()
+        .all()
+        .left()
+        .outer()
+        .using(["tenant_id"])
+        .select(diesel::dsl::sql::<(
+            diesel::sql_types::Text,
+            diesel::sql_types::Text,
+        )>("`events`.`tenant_id`, `tenants`.`plan`"));
+    let semi_join = events
+        .clickhouse_join(tenants::table)
+        .left()
+        .semi()
+        .using(["tenant_id"])
+        .select(diesel::dsl::sql::<diesel::sql_types::Text>(
+            "`events`.`tenant_id`",
+        ));
+    let anti_join = tenants::table
+        .clickhouse_join(events)
+        .left()
+        .anti()
+        .using(["tenant_id"])
+        .select(diesel::dsl::sql::<diesel::sql_types::Text>(
+            "`tenants`.`tenant_id`",
+        ));
+    let asof_join = events
+        .clickhouse_join(tenant_rates::table)
+        .asof()
+        .left()
+        .on(diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "`events`.`tenant_id` = `tenant_rates`.`tenant_id` AND `events`.`created_at` >= `tenant_rates`.`effective_at`",
+        ))
+        .select(diesel::dsl::sql::<(diesel::sql_types::BigInt, diesel::sql_types::Double)>(
+            "`events`.`id`, `tenant_rates`.`rate`",
+        ));
+
+    assert_eq!(
+        to_sql(&any_join).unwrap(),
+        "SELECT `events`.`tenant_id`, `tenants`.`plan` FROM `events` ANY INNER JOIN `tenants` ON (`events`.`tenant_id` = `tenants`.`tenant_id`)"
+    );
+    assert_eq!(
+        to_sql(&using_join).unwrap(),
+        "SELECT `events`.`tenant_id`, `tenants`.`plan` FROM `events` GLOBAL ALL LEFT OUTER JOIN `tenants` USING (`tenant_id`)"
+    );
+    assert_eq!(
+        to_sql(&semi_join).unwrap(),
+        "SELECT `events`.`tenant_id` FROM `events` LEFT SEMI JOIN `tenants` USING (`tenant_id`)"
+    );
+    assert_eq!(
+        to_sql(&anti_join).unwrap(),
+        "SELECT `tenants`.`tenant_id` FROM `tenants` LEFT ANTI JOIN `events` USING (`tenant_id`)"
+    );
+    assert_eq!(
+        to_sql(&asof_join).unwrap(),
+        "SELECT `events`.`id`, `tenant_rates`.`rate` FROM `events` ASOF LEFT JOIN `tenant_rates` ON `events`.`tenant_id` = `tenant_rates`.`tenant_id` AND `events`.`created_at` >= `tenant_rates`.`effective_at`"
+    );
+}
+
+#[test]
+fn renders_extended_clickhouse_data_types() {
+    let ddl = create_table("analytics.type_showcase")
+        .column("big_signed", DataType::Int128)
+        .column("huge_signed", DataType::Int256)
+        .column("big_unsigned", DataType::UInt128)
+        .column("huge_unsigned", DataType::UInt256)
+        .column("compact_float", DataType::BFloat16)
+        .column("amount32", DataType::decimal32(2))
+        .column("amount64", DataType::decimal64(4))
+        .column("amount128", DataType::decimal128(8))
+        .column("amount256", DataType::decimal256(12))
+        .column("amount", DataType::decimal(18, 6))
+        .column(
+            "status",
+            DataType::enum8([("draft", 1), ("published", 2), ("archived", 3)]),
+        )
+        .column("kind", DataType::enum16([("organic", 100), ("paid", 200)]))
+        .column(
+            "dimensions",
+            DataType::tuple([DataType::String, DataType::UInt64, DataType::Float64]),
+        )
+        .column(
+            "attributes",
+            DataType::nested([
+                NestedField::new("key", DataType::String),
+                NestedField::new("value", DataType::String),
+            ]),
+        )
+        .engine(TableEngine::memory());
+
+    assert_eq!(
+        to_sql(&ddl).unwrap(),
+        "CREATE TABLE `analytics`.`type_showcase` (\n    `big_signed` Int128,\n    `huge_signed` Int256,\n    `big_unsigned` UInt128,\n    `huge_unsigned` UInt256,\n    `compact_float` BFloat16,\n    `amount32` Decimal32(2),\n    `amount64` Decimal64(4),\n    `amount128` Decimal128(8),\n    `amount256` Decimal256(12),\n    `amount` Decimal(18, 6),\n    `status` Enum8('draft' = 1, 'published' = 2, 'archived' = 3),\n    `kind` Enum16('organic' = 100, 'paid' = 200),\n    `dimensions` Tuple(String, UInt64, Float64),\n    `attributes` Nested(`key` String, `value` String)\n) ENGINE = Memory"
+    );
+}
+
+#[test]
+fn renders_create_table_mergetree_ddl() {
+    let ddl = create_table("analytics.events")
+        .if_not_exists()
+        .column("id", DataType::UInt64)
+        .column("tenant_id", DataType::low_cardinality(DataType::String))
+        .column("created_at", DataType::DateTime)
+        .column("success", DataType::Bool)
+        .column("latency_ms", DataType::Float64)
+        .column("tags", DataType::array(DataType::String))
+        .column("attrs", DataType::map(DataType::String, DataType::String))
+        .column("client_ip", DataType::IPv4)
+        .column("client_ip6", DataType::IPv6)
+        .column(
+            "latency_state",
+            DataType::aggregate_function("sum", [DataType::Float64]),
+        )
+        .column(
+            "ids_state",
+            DataType::aggregate_function("uniqExact", [DataType::UInt64]),
+        )
+        .column_def(Column::new("payload", DataType::String).codec("ZSTD(1)"))
+        .column_def(Column::new("created_date", DataType::Date).alias_expr("toDate(created_at)"))
+        .engine(
+            replacing_merge_tree()
+                .partition_by(["toDate(created_at)"])
+                .primary_key(["tenant_id", "id"])
+                .order_by(["tenant_id", "id"])
+                .sample_by("id")
+                .ttl("created_at + INTERVAL 7 DAY")
+                .setting("index_granularity", 8192_i64),
+        );
+
+    assert_eq!(
+        to_sql(&ddl).unwrap(),
+        "CREATE TABLE IF NOT EXISTS `analytics`.`events` (\n    `id` UInt64,\n    `tenant_id` LowCardinality(String),\n    `created_at` DateTime,\n    `success` Bool,\n    `latency_ms` Float64,\n    `tags` Array(String),\n    `attrs` Map(String, String),\n    `client_ip` IPv4,\n    `client_ip6` IPv6,\n    `latency_state` AggregateFunction(sum, Float64),\n    `ids_state` AggregateFunction(uniqExact, UInt64),\n    `payload` String CODEC(ZSTD(1)),\n    `created_date` Date ALIAS toDate(created_at)\n) ENGINE = ReplacingMergeTree PARTITION BY toDate(created_at) PRIMARY KEY (tenant_id, id) ORDER BY (tenant_id, id) SAMPLE BY id TTL created_at + INTERVAL 7 DAY SETTINGS index_granularity = 8192"
+    );
+}
+
+#[test]
+fn renders_alter_table_helpers() {
+    let add_column = alter_table("analytics.events").add_column_after(
+        Column::new("page", DataType::String).default_expr("'home'"),
+        "id",
+    );
+    let rename_column = alter_table("analytics.events").rename_column("page", "page_name");
+    let drop_column = alter_table("analytics.events").drop_column("page_name");
+    let add_index = alter_table("analytics.events")
+        .add_index(TableIndex::custom("id_minmax", "id", "minmax").granularity(1));
+    let materialize_index = alter_table("analytics.events")
+        .materialize_index("id_minmax")
+        .setting("mutations_sync", 2_i64);
+    let drop_index = alter_table("analytics.events").drop_index("id_minmax");
+    let ttl = alter_table("analytics.events").modify_ttl("created_at + INTERVAL 30 DAY");
+
+    assert_eq!(
+        to_sql(&add_column).unwrap(),
+        "ALTER TABLE `analytics`.`events` ADD COLUMN `page` String DEFAULT 'home' AFTER `id`"
+    );
+    assert_eq!(
+        to_sql(&rename_column).unwrap(),
+        "ALTER TABLE `analytics`.`events` RENAME COLUMN `page` TO `page_name`"
+    );
+    assert_eq!(
+        to_sql(&drop_column).unwrap(),
+        "ALTER TABLE `analytics`.`events` DROP COLUMN `page_name`"
+    );
+    assert_eq!(
+        to_sql(&add_index).unwrap(),
+        "ALTER TABLE `analytics`.`events` ADD INDEX `id_minmax` id TYPE minmax GRANULARITY 1"
+    );
+    assert_eq!(
+        to_sql(&materialize_index).unwrap(),
+        "ALTER TABLE `analytics`.`events` MATERIALIZE INDEX `id_minmax` SETTINGS mutations_sync = 2"
+    );
+    assert_eq!(
+        to_sql(&drop_index).unwrap(),
+        "ALTER TABLE `analytics`.`events` DROP INDEX `id_minmax`"
+    );
+    assert_eq!(
+        to_sql(&ttl).unwrap(),
+        "ALTER TABLE `analytics`.`events` MODIFY TTL created_at + INTERVAL 30 DAY"
+    );
+}
+
+#[test]
+fn renders_create_materialized_view_ddl() {
+    use self::events::dsl::*;
+
+    let to_view = create_materialized_view("analytics.events_by_tenant_mv")
+        .if_not_exists()
+        .to("analytics.events_by_tenant")
+        .as_select(
+            events
+                .group_by(tenant_id)
+                .select((tenant_id, count_if(success))),
+        );
+    let engine_view = create_materialized_view("analytics.events_owned_mv")
+        .engine(TableEngine::custom("SummingMergeTree ORDER BY tenant_id"))
+        .populate()
+        .as_select(
+            events
+                .group_by(tenant_id)
+                .select((tenant_id, count_if(success))),
+        );
+
+    assert_eq!(
+        to_sql(&to_view).unwrap(),
+        "CREATE MATERIALIZED VIEW IF NOT EXISTS `analytics`.`events_by_tenant_mv` TO `analytics`.`events_by_tenant` AS SELECT `events`.`tenant_id`, countIf(`events`.`success`) FROM `events` GROUP BY `events`.`tenant_id`"
+    );
+    assert_eq!(
+        to_sql(&engine_view).unwrap(),
+        "CREATE MATERIALIZED VIEW `analytics`.`events_owned_mv` ENGINE = SummingMergeTree ORDER BY tenant_id POPULATE AS SELECT `events`.`tenant_id`, countIf(`events`.`success`) FROM `events` GROUP BY `events`.`tenant_id`"
     );
 }
 
