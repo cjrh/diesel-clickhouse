@@ -1,0 +1,32 @@
+[package]
+name = "diesel-clickhouse"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Diesel ORM query-builder extensions for ClickHouse SQL."
+documentation = "https://docs.rs/diesel-clickhouse"
+repository = "https://github.com/cjrh/diesel-clickhouse"
+readme = "README.md"
+license = "MIT OR Apache-2.0"
+keywords = ["diesel", "clickhouse", "sql", "orm", "analytics"]
+categories = ["database"]
+
+[dependencies]
+# Custom backends need Diesel's intentionally-unstable third-party backend
+# surface. Keep the upper bound explicit: each Diesel minor can alter backend
+# internals and should be validated before widening this range.
+diesel = { version = ">=2.2, <2.3", default-features = false, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes", "with-deprecated"] }
+
+[dev-dependencies]
+# Pinned to the newest releases that still support this crate's current MSRV.
+clickhouse = "=0.13.3"
+testcontainers = "=0.25.0"
+testcontainers-modules = { version = "=0.13.0", features = ["clickhouse"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+
+[lib]
+doctest = false
+
+[package.metadata.docs.rs]
+all-features = true
+rustdoc-args = ["--cfg", "docsrs"]
