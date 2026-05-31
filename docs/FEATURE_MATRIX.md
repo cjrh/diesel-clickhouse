@@ -17,7 +17,7 @@ Legend:
 | ✅ | ClickHouse backend marker and query builder | `to_sql(&query)?` | Backtick identifiers, `?` placeholders. |
 | ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Still useful for inspection and external-client execution. |
 | 🧪 | Execute rendered SQL via `clickhouse` crate | `client.query(&to_sql(&query)?).bind(...).fetch_all()` | Live Docker test validates this workflow. |
-| 🚧 🧪 | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Initial HTTP-backed `ClickHouseConnection` supports `establish`, `load`, `execute`, `batch_execute`, primitive/text/nullable rows, `Array<T>` into `Vec<T>`, `Map<K,V>` into `BTreeMap<K,V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant decoding, and `sql_query`; transactions are explicitly unsupported and richer binary/native-decimal coverage is pending. |
+| 🚧 🧪 | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Initial HTTP-backed `ClickHouseConnection` supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute`, server-side HTTP parameters for supported binds with escaped-literal fallback for ambiguous cases, primitive/text/nullable rows, `Array<T>` into `Vec<T>`, `Map<K,V>` into `BTreeMap<K,V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant decoding, optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256, and `sql_query`; transactions are explicitly unsupported and richer binary-vector/native-protocol coverage is pending. |
 
 ## ClickHouse SQL types
 
@@ -37,7 +37,7 @@ Legend:
 | ✅ 🧪 | Vector embeddings | `Array<Float>`/`Array<Double>` columns, `vector_f32([..])`, `vector_f64([..])` |
 | ✅ 🧪 | Nullable values | Diesel's `Nullable<T>`, `.is_null()`, `.is_not_null()` |
 | ✅ 🧪 | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256`; DDL `DataType::{UInt128, UInt256, Int128, Int256}` |
-| ✅ 🧪 | Decimal families | `Decimal32<S>`, `Decimal64<S>`, `Decimal128<S>`, `Decimal256<S>`; DDL `DataType::decimal64(4)` |
+| ✅ 🧪 | Decimal families | `Decimal32<S>`, `Decimal64<S>`, `Decimal128<S>`, `Decimal256<S>`; DDL `DataType::decimal64(4)`; optional `bigdecimal` feature for native Rust loading/binds |
 | ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>`, `Nested<...>`, `Enum8`, `Enum16`; DDL `DataType::tuple(...)`, `DataType::nested(...)`, `DataType::enum8(...)` |
 | ✅ 🧪 | Network / Geo / semi-structured types | `IPv4`, `IPv6`, `Point`, `Ring`, `Dynamic`, `Variant`; DDL `DataType::{Point, Ring}`, `DataType::dynamic_with_max_types(4)`, `DataType::variant(...)` |
 

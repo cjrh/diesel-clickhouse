@@ -49,7 +49,29 @@ let rows: Vec<(String, i64)> = events::table
     .load(&mut conn)?;
 ```
 
-The current connection supports `establish`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It inlines Diesel-collected bind values into escaped ClickHouse SQL literals before sending the query over HTTP; literal `?` characters inside SQL strings/comments are preserved.
+For explicit code-assembled configuration, use `ClickHouseConnectionOptions`:
+
+```rust,ignore
+use diesel_clickhouse::ClickHouseConnectionOptions;
+
+let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
+    .user("default")
+    .password("password")
+    .database("analytics")
+    .option("max_threads", "1")
+    .connect()?;
+```
+
+The current connection supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `BigDecimal` values with the `bigdecimal` feature, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It sends supported Diesel-collected bind values as ClickHouse HTTP server-side parameters; ambiguous cases such as `NULL` HTTP parameters and abstract composite metadata fall back to escaped literal inlining. Literal `?` characters inside SQL strings/comments are preserved.
+
+Enable native BigDecimal decimal values with:
+
+```toml
+[dependencies]
+diesel-clickhouse = { version = "...", features = ["bigdecimal"] }
+```
+
+With that feature, `bigdecimal::BigDecimal` implements `FromSql`/`ToSql` for Diesel `Numeric` and ClickHouse `Decimal32<S>`/`Decimal64<S>`/`Decimal128<S>`/`Decimal256<S>`. String-form decimal loading remains available without extra dependencies.
 
 ClickHouse is not treated as an OLTP database: Diesel transaction APIs return a clear unsupported error, and `execute` returns `0` because ClickHouse HTTP does not provide a conventional affected-row count for DDL and mutations.
 

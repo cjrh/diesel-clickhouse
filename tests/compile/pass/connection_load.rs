@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use diesel::prelude::*;
-use diesel_clickhouse::ClickHouseConnection;
+use diesel_clickhouse::{ClickHouseConnection, ClickHouseConnectionOptions};
 
 diesel::table! {
     use diesel::sql_types::*;
@@ -21,6 +21,11 @@ fn assert_diesel_connection<C: diesel::Connection<Backend = diesel_clickhouse::C
 
 fn main() {
     assert_diesel_connection::<ClickHouseConnection>();
+    let _options = ClickHouseConnectionOptions::new("http://localhost:8123")
+        .user("default")
+        .password("password")
+        .database("analytics")
+        .option("max_threads", "1");
 
     fn loads_with_idiomatic_diesel(conn: &mut ClickHouseConnection) -> diesel::QueryResult<()> {
         use self::users::dsl::*;

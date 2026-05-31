@@ -19,29 +19,29 @@ use testcontainers_modules::{
 };
 
 use diesel_clickhouse::{
-    ClickHouseConnection, ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods,
-    Column, DataType, NestedField, OverDsl, Setting, TableEngine, TableIndex, abs,
-    accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table, analysis_of_variance,
-    approx_top_sum, array_count, array_exists, array_filter, array_map, base64_decode,
-    base64_encode, cast, ceil, city_hash64, concat, corr, count_if, count_merge, covar_pop,
-    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table,
-    cut_query_string, date_diff, dense_rank, domain, domain_without_www, farm_fingerprint64,
-    final_table, finalize_aggregation, first_significant_subdomain, floor, greatest, group_by_all,
-    grouping_sets, hex, histogram, ilike, ipv4_num_to_string, ipv4_string_to_num,
-    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json, json_extract_int,
-    json_extract_int_path, json_extract_string_path, json_has, json_length, json_value,
-    l2_distance, lag_in_frame, lambda, lambda2, least, length, lower, mann_whitney_u_test,
-    map_apply, map_contains, map_filter, max_if, merge_tree, min_if, multi_match_any,
-    multi_match_any_index, mutation_assignment, partition_by, partition_expr, position, prewhere,
-    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
-    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
-    row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
-    simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, substring, sum_merge,
-    sum_state, summing_merge_tree, to_date_time, to_float64, to_float64_or_null, to_int32,
-    to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null,
-    top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
-    vector_f32, with_fill, xx_hash64,
+    ClickHouseConnection, ClickHouseConnectionOptions, ClickHouseJoinDsl, ClickHouseQueryDsl,
+    ClickHouseTextExpressionMethods, Column, DataType, NestedField, OverDsl, Setting, TableEngine,
+    TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table,
+    analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter, array_map,
+    base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count_if, count_merge,
+    covar_pop, covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view,
+    create_table, cut_query_string, date_diff, dense_rank, domain, domain_without_www,
+    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
+    greatest, group_by_all, grouping_sets, hex, histogram, ilike, ipv4_num_to_string,
+    ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json,
+    json_extract_int, json_extract_int_path, json_extract_string_path, json_has, json_length,
+    json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower,
+    mann_whitney_u_test, map_apply, map_contains, map_filter, max_if, merge_tree, min_if,
+    multi_match_any, multi_match_any_index, mutation_assignment, partition_by, partition_expr,
+    position, prewhere, projection, quantile, quantile_deterministic, quantile_exact,
+    quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
+    simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable,
+    stddev_samp, substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
+    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
+    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
+    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
+    var_pop, var_pop_stable, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -311,6 +311,14 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         }
 
         let mut conn = ClickHouseConnection::establish(&diesel_url)?;
+        let mut options_conn = ClickHouseConnectionOptions::from_url(&diesel_url)?
+            .option("max_threads", "1")
+            .connect()?;
+        let options_value: i32 = diesel::select(diesel::dsl::sql::<diesel::sql_types::Integer>(
+            "toInt32(1)",
+        ))
+        .get_result(&mut options_conn)?;
+        assert_eq!(options_value, 1);
         let rows: Vec<(String, i64)> = events
             .filter(tenant_id.eq("acme").and(success.eq(true)))
             .group_by(tenant_id)
@@ -382,6 +390,66 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .get_result(&mut conn)?;
         assert_eq!(decimal_value, "123.45");
 
+        #[cfg(feature = "bigdecimal")]
+        {
+            use std::str::FromStr;
+
+            use bigdecimal::BigDecimal;
+
+            let numeric_decimal: BigDecimal = diesel::select(diesel::dsl::sql::<
+                diesel::sql_types::Numeric,
+            >("toDecimal128('1234567890.123456', 6)"))
+            .get_result(&mut conn)?;
+            assert_eq!(
+                numeric_decimal,
+                BigDecimal::from_str("1234567890.123456")?
+            );
+
+            let decimal_family: (BigDecimal, BigDecimal, BigDecimal, BigDecimal) = diesel::select((
+                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal32<2>>(
+                    "toDecimal32('12.34', 2)",
+                ),
+                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal64<4>>(
+                    "toDecimal64('-56.7890', 4)",
+                ),
+                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal128<8>>(
+                    "toDecimal128('123456789.12345678', 8)",
+                ),
+                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal256<12>>(
+                    "toDecimal256('12345678901234567890.123456789012', 12)",
+                ),
+            ))
+            .get_result(&mut conn)?;
+            assert_eq!(
+                decimal_family,
+                (
+                    BigDecimal::from_str("12.34")?,
+                    BigDecimal::from_str("-56.7890")?,
+                    BigDecimal::from_str("123456789.12345678")?,
+                    BigDecimal::from_str("12345678901234567890.123456789012")?,
+                )
+            );
+
+            #[derive(Debug, PartialEq, QueryableByName)]
+            struct BigDecimalBindRow {
+                #[diesel(column_name = value)]
+                #[diesel(sql_type = diesel_clickhouse::sql_types::Decimal64<2>)]
+                value: BigDecimal,
+            }
+
+            let bound_decimal = diesel::sql_query("SELECT CAST(?, 'Decimal64(2)') AS value")
+                .bind::<diesel_clickhouse::sql_types::Decimal64<2>, _>(BigDecimal::from_str(
+                    "987.65",
+                )?)
+                .get_result::<BigDecimalBindRow>(&mut conn)?;
+            assert_eq!(
+                bound_decimal,
+                BigDecimalBindRow {
+                    value: BigDecimal::from_str("987.65")?,
+                }
+            );
+        }
+
         let maybe_value: Option<String> = diesel::select(diesel::dsl::sql::<
             diesel::sql_types::Nullable<diesel::sql_types::Text>,
         >("NULL"))
@@ -443,6 +511,21 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .order(id.asc())
             .load(&mut conn)?;
         assert_eq!(literal_question_rows, vec!["literal ?".to_string(); 3]);
+
+        let server_parameter_text: String = diesel::select(
+            diesel::dsl::sql::<diesel::sql_types::Text>("").bind::<diesel::sql_types::Text, _>(
+                "quote ' and question ? stay data",
+            ),
+        )
+        .get_result(&mut conn)?;
+        assert_eq!(server_parameter_text, "quote ' and question ? stay data");
+
+        let server_parameter_null: Option<i32> = diesel::select(
+            diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("")
+                .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>),
+        )
+        .get_result(&mut conn)?;
+        assert_eq!(server_parameter_null, None);
 
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_spike")
             .execute(&mut conn)?;

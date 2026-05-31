@@ -35,8 +35,8 @@
 //! ## Scope
 //!
 //! This crate focuses on **building ClickHouse SQL from Diesel ASTs** and now
-//! includes an initial HTTP-backed [`ClickHouseConnection`] for idiomatic Diesel
-//! `load`/`execute`/`batch_execute` workflows. You can still execute rendered SQL through your
+//! includes an initial HTTP-backed [`ClickHouseConnection`] plus explicit
+//! [`ClickHouseConnectionOptions`] for idiomatic Diesel `load`/`execute`/`batch_execute` workflows. You can still execute rendered SQL through your
 //! ClickHouse client of choice when you need client-specific behavior.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
@@ -80,8 +80,8 @@ pub use clauses::{
     sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
 };
 pub use connection::{
-    ClickHouseConnection, ClickHouseCursor, ClickHouseField, ClickHouseRow,
-    ClickHouseTransactionManager,
+    ClickHouseConnection, ClickHouseConnectionOptions, ClickHouseCursor, ClickHouseField,
+    ClickHouseRow, ClickHouseTransactionManager,
 };
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,

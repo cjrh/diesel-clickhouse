@@ -11,11 +11,16 @@ license = "MIT OR Apache-2.0"
 keywords = ["diesel", "clickhouse", "sql", "orm", "analytics"]
 categories = ["database"]
 
+[features]
+default = []
+bigdecimal = ["dep:bigdecimal", "diesel/numeric"]
+
 [dependencies]
 # Custom backends need Diesel's intentionally-unstable third-party backend
 # surface. Keep the upper bound explicit: each Diesel minor can alter backend
 # internals and should be validated before widening this range.
 diesel = { version = ">=2.2, <2.3", default-features = false, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes", "with-deprecated"] }
+bigdecimal = { version = ">=0.0.13, <0.5.0", optional = true }
 clickhouse = "=0.13.3"
 tokio = { version = "1", features = ["rt"] }
 url = "2"

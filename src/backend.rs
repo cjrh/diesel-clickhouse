@@ -5,6 +5,8 @@
 //! by the render-only [`to_sql`] helper and the HTTP-backed
 //! [`ClickHouseConnection`](crate::ClickHouseConnection).
 
+use std::borrow::Cow;
+
 use diesel::backend::{
     Backend, DieselReserveSpecialization, SqlDialect, TrustedBackend, sql_dialect,
 };
@@ -23,15 +25,36 @@ use diesel::sql_types::{
 pub struct ClickHouse;
 
 /// Minimal type metadata used by the bind collector.
-#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct ClickHouseTypeMetadata {
-    /// Canonical ClickHouse type name for diagnostics or future clients.
+    /// Canonical ClickHouse type name for diagnostics and broad behavior groups.
     pub name: &'static str,
+    parameter_type: Cow<'static, str>,
 }
 
 impl ClickHouseTypeMetadata {
     pub const fn new(name: &'static str) -> Self {
-        Self { name }
+        Self {
+            name,
+            parameter_type: Cow::Borrowed(name),
+        }
+    }
+
+    /// Build metadata where the server-side parameter type needs more detail
+    /// than the broad canonical family name, such as `Decimal64(2)`.
+    pub fn with_parameter_type(
+        name: &'static str,
+        parameter_type: impl Into<Cow<'static, str>>,
+    ) -> Self {
+        Self {
+            name,
+            parameter_type: parameter_type.into(),
+        }
+    }
+
+    /// ClickHouse type string used for HTTP server-side parameters.
+    pub fn parameter_type(&self) -> &str {
+        &self.parameter_type
     }
 }
 

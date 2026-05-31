@@ -349,7 +349,10 @@ macro_rules! has_decimal_type {
     ($name:ident => $metadata:literal) => {
         impl<const SCALE: u8> HasSqlType<$name<SCALE>> for ClickHouse {
             fn metadata(_: &mut Self::MetadataLookup) -> Self::TypeMetadata {
-                ClickHouseTypeMetadata::new($metadata)
+                ClickHouseTypeMetadata::with_parameter_type(
+                    $metadata,
+                    format!(concat!($metadata, "({})"), SCALE),
+                )
             }
         }
     };

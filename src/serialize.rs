@@ -212,6 +212,65 @@ impl_decimal_string_from_sql!(Decimal64);
 impl_decimal_string_from_sql!(Decimal128);
 impl_decimal_string_from_sql!(Decimal256);
 
+#[cfg(feature = "bigdecimal")]
+mod bigdecimal_support {
+    use std::io::Write;
+
+    use bigdecimal::BigDecimal;
+    use diesel::deserialize::{self, FromSql};
+    use diesel::serialize::{self, IsNull, Output, ToSql};
+    use diesel::sql_types::Numeric;
+
+    use crate::backend::ClickHouse;
+    use crate::types::{Decimal32, Decimal64, Decimal128, Decimal256};
+
+    macro_rules! impl_bigdecimal_sql {
+        ($sql_type:ty) => {
+            impl ToSql<$sql_type, ClickHouse> for BigDecimal {
+                fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, ClickHouse>) -> serialize::Result {
+                    write!(out, "{}", self)
+                        .map(|_| IsNull::No)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            }
+
+            impl FromSql<$sql_type, ClickHouse> for BigDecimal {
+                fn from_sql(
+                    bytes: <ClickHouse as diesel::backend::Backend>::RawValue<'_>,
+                ) -> deserialize::Result<Self> {
+                    Ok(std::str::from_utf8(bytes)?.parse::<BigDecimal>()?)
+                }
+            }
+        };
+    }
+
+    macro_rules! impl_bigdecimal_decimal_type {
+        ($decimal:ident) => {
+            impl<const SCALE: u8> ToSql<$decimal<SCALE>, ClickHouse> for BigDecimal {
+                fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, ClickHouse>) -> serialize::Result {
+                    write!(out, "{}", self)
+                        .map(|_| IsNull::No)
+                        .map_err(|e| Box::new(e) as Box<dyn std::error::Error + Send + Sync>)
+                }
+            }
+
+            impl<const SCALE: u8> FromSql<$decimal<SCALE>, ClickHouse> for BigDecimal {
+                fn from_sql(
+                    bytes: <ClickHouse as diesel::backend::Backend>::RawValue<'_>,
+                ) -> deserialize::Result<Self> {
+                    Ok(std::str::from_utf8(bytes)?.parse::<BigDecimal>()?)
+                }
+            }
+        };
+    }
+
+    impl_bigdecimal_sql!(Numeric);
+    impl_bigdecimal_decimal_type!(Decimal32);
+    impl_bigdecimal_decimal_type!(Decimal64);
+    impl_bigdecimal_decimal_type!(Decimal128);
+    impl_bigdecimal_decimal_type!(Decimal256);
+}
+
 impl<ST, T> FromSql<Array<ST>, ClickHouse> for Vec<T>
 where
     T: FromSql<ST, ClickHouse>,
