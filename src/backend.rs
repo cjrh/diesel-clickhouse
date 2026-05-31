@@ -1,9 +1,9 @@
 //! Lightweight ClickHouse backend for Diesel SQL rendering.
 //!
-//! The backend intentionally stops at query construction.  It gives Diesel a
-//! ClickHouse-shaped SQL dialect (`backtick` identifiers, `?` placeholders and
-//! ANSI-ish `SELECT` layout) without pretending to implement ClickHouse's wire
-//! protocol or a full [`diesel::Connection`].
+//! The backend gives Diesel a ClickHouse-shaped SQL dialect (`backtick`
+//! identifiers, `?` placeholders and ANSI-ish `SELECT` layout).  It is shared
+//! by the render-only [`to_sql`] helper and the HTTP-backed
+//! [`ClickHouseConnection`](crate::ClickHouseConnection).
 
 use diesel::backend::{
     Backend, DieselReserveSpecialization, SqlDialect, TrustedBackend, sql_dialect,
@@ -149,8 +149,9 @@ impl QueryFragment<ClickHouse> for BoxedLimitOffsetClause<'_, ClickHouse> {
 /// Render any Diesel AST node as ClickHouse SQL without the debug bind comment.
 ///
 /// Bind parameters are represented as `?`, matching the placeholder style used
-/// by many ClickHouse clients.  The corresponding values can be collected by a
-/// connection adapter later via Diesel's normal bind-collector path.
+/// by many ClickHouse clients. [`ClickHouseConnection`](crate::ClickHouseConnection)
+/// collects the corresponding Diesel bind values and sends the resulting query
+/// over ClickHouse HTTP.
 pub fn to_sql<T>(query: &T) -> QueryResult<String>
 where
     T: QueryFragment<ClickHouse>,

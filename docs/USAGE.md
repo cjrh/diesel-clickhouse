@@ -1,6 +1,6 @@
 # Usage guide
 
-`diesel-clickhouse` is currently a render-first Diesel extension: it turns Diesel ASTs and ClickHouse-specific DSL nodes into ClickHouse SQL, then you execute that SQL with a ClickHouse client such as the official `clickhouse` crate.
+`diesel-clickhouse` turns Diesel ASTs and ClickHouse-specific DSL nodes into ClickHouse SQL. You can either render SQL and execute it with a ClickHouse client, or use the initial synchronous `ClickHouseConnection` for idiomatic Diesel `load`/`execute` calls.
 
 ## Render and execute
 
@@ -29,6 +29,29 @@ let rows: Vec<(String, u64, f64)> = Client::default()
 ```
 
 Rendered SQL uses backtick identifiers and `?` bind placeholders. Bind values are supplied to the external ClickHouse client in the same order Diesel rendered them.
+
+## Diesel `Connection`
+
+`ClickHouseConnection` is a synchronous Diesel connection backed by ClickHouse's HTTP interface:
+
+```rust,ignore
+use diesel::prelude::*;
+use diesel_clickhouse::ClickHouseConnection;
+
+let mut conn = ClickHouseConnection::establish(
+    "http://default:password@localhost:8123/analytics",
+)?;
+
+let rows: Vec<(String, i64)> = events::table
+    .filter(events::tenant_id.eq("acme").and(events::success.eq(true)))
+    .group_by(events::tenant_id)
+    .select((events::tenant_id, diesel::dsl::count_star()))
+    .load(&mut conn)?;
+```
+
+The current connection supports `establish`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It inlines Diesel-collected bind values into escaped ClickHouse SQL literals before sending the query over HTTP; literal `?` characters inside SQL strings/comments are preserved.
+
+ClickHouse is not treated as an OLTP database: Diesel transaction APIs return a clear unsupported error, and `execute` returns `0` because ClickHouse HTTP does not provide a conventional affected-row count for DDL and mutations.
 
 ## Schema declarations
 
@@ -107,4 +130,4 @@ Diesel's built-in `.inner_join(...).on(...)` does render, but Diesel emits a par
 
 Diesel validates DSL expressions against Rust schema metadata from `table!`/`schema.rs`. That catches many mistakes: unknown columns, incompatible SQL types, aggregate/non-aggregate mixing, and select tuple shape mismatches.
 
-It does not connect to a development ClickHouse database during compilation. A future `Connection` implementation can support schema-generation tooling, but SQLx-style live query validation is not part of Diesel's normal model.
+It does not connect to a development ClickHouse database during compilation. `ClickHouseConnection` can support future schema-generation tooling, but SQLx-style live query validation is not part of Diesel's normal model.

@@ -19,28 +19,29 @@ use testcontainers_modules::{
 };
 
 use diesel_clickhouse::{
-    ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
-    NestedField, OverDsl, Setting, TableEngine, TableIndex, abs, accurate_cast_or_null, aggregate,
-    aggregating_merge_tree, alter_table, analysis_of_variance, approx_top_sum, array_count,
-    array_exists, array_filter, array_map, base64_decode, base64_encode, cast, ceil, city_hash64,
-    concat, corr, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp,
-    covar_samp_stable, create_materialized_view, create_table, cut_query_string, date_diff,
-    dense_rank, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
-    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
-    ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
-    is_ipv6_string, is_null, is_valid_json, json_extract_int, json_extract_int_path,
-    json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
-    lambda2, least, length, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
-    max_if, merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment,
-    partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
-    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
-    replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
-    simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable,
-    stddev_samp, substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
-    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
-    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
-    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
-    var_pop, var_pop_stable, vector_f32, with_fill, xx_hash64,
+    ClickHouseConnection, ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods,
+    Column, DataType, NestedField, OverDsl, Setting, TableEngine, TableIndex, abs,
+    accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table, analysis_of_variance,
+    approx_top_sum, array_count, array_exists, array_filter, array_map, base64_decode,
+    base64_encode, cast, ceil, city_hash64, concat, corr, count_if, count_merge, covar_pop,
+    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table,
+    cut_query_string, date_diff, dense_rank, domain, domain_without_www, farm_fingerprint64,
+    final_table, finalize_aggregation, first_significant_subdomain, floor, greatest, group_by_all,
+    grouping_sets, hex, histogram, ilike, ipv4_num_to_string, ipv4_string_to_num,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json, json_extract_int,
+    json_extract_int_path, json_extract_string_path, json_has, json_length, json_value,
+    l2_distance, lag_in_frame, lambda, lambda2, least, length, lower, mann_whitney_u_test,
+    map_apply, map_contains, map_filter, max_if, merge_tree, min_if, multi_match_any,
+    multi_match_any_index, mutation_assignment, partition_by, partition_expr, position, prewhere,
+    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
+    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
+    row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, substring, sum_merge,
+    sum_state, summing_merge_tree, to_date_time, to_float64, to_float64_or_null, to_int32,
+    to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null,
+    top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
+    vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -125,6 +126,7 @@ diesel::allow_tables_to_appear_in_same_query!(
 
 struct ClickHouseFixture {
     _node: ContainerAsync<ClickHouseImage>,
+    url: String,
     client: clickhouse::Client,
 }
 
@@ -139,11 +141,12 @@ async fn start_clickhouse() -> TestResult<ClickHouseFixture> {
     let port = node.get_host_port_ipv4(CLICKHOUSE_PORT).await?;
     let url = format!("http://{host}:{port}");
     let client = clickhouse::Client::default()
-        .with_url(url)
+        .with_url(&url)
         .with_user("default")
         .with_password("password");
     Ok(ClickHouseFixture {
         _node: node,
+        url,
         client,
     })
 }
@@ -251,6 +254,255 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     )))?;
     let nullable_row: (bool, bool) = fixture.client.query(&nullable_sql).fetch_one().await?;
     assert_eq!(nullable_row, (true, false));
+
+    let diesel_url = fixture
+        .url
+        .replacen("http://", "http://default:password@", 1);
+    tokio::task::spawn_blocking(move || -> TestResult<()> {
+        use std::collections::BTreeMap;
+
+        use diesel::connection::SimpleConnection;
+        use diesel::Connection;
+
+        #[derive(Debug, PartialEq, QueryableByName)]
+        struct ConnectionRow {
+            #[diesel(column_name = id)]
+            #[diesel(sql_type = diesel::sql_types::BigInt)]
+            row_id: i64,
+            #[diesel(column_name = tenant_id)]
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            row_tenant_id: String,
+        }
+
+        #[derive(Debug, PartialEq, QueryableByName)]
+        struct ConnectionNetworkRow {
+            #[diesel(column_name = uuid_value)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Uuid)]
+            row_uuid: String,
+            #[diesel(column_name = ipv4_value)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::IPv4)]
+            row_ipv4: String,
+            #[diesel(column_name = ipv6_value)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::IPv6)]
+            row_ipv6: String,
+        }
+
+        #[derive(Debug, PartialEq, QueryableByName)]
+        struct ConnectionNullableCompositeRow {
+            #[diesel(column_name = nullable_tags)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Nullable<diesel::sql_types::Text>>)]
+            row_nullable_tags: Vec<Option<String>>,
+            #[diesel(column_name = nullable_attrs)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Map<diesel::sql_types::Text, diesel::sql_types::Nullable<diesel::sql_types::Integer>>)]
+            row_nullable_attrs: BTreeMap<String, Option<i32>>,
+            #[diesel(column_name = nullable_tuple)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Tuple<(diesel::sql_types::Text, diesel::sql_types::Nullable<diesel::sql_types::BigInt>)>)]
+            row_nullable_tuple: (String, Option<i64>),
+        }
+
+        #[derive(Debug, PartialEq, QueryableByName)]
+        struct ConnectionSemiStructuredRow {
+            #[diesel(column_name = dynamic_value)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Dynamic)]
+            row_dynamic: String,
+            #[diesel(column_name = variant_value)]
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Variant<(diesel_clickhouse::sql_types::UInt64, diesel::sql_types::Text)>)]
+            row_variant: String,
+        }
+
+        let mut conn = ClickHouseConnection::establish(&diesel_url)?;
+        let rows: Vec<(String, i64)> = events
+            .filter(tenant_id.eq("acme").and(success.eq(true)))
+            .group_by(tenant_id)
+            .select((tenant_id, diesel::dsl::count_star()))
+            .load(&mut conn)?;
+        assert_eq!(rows, vec![("acme".to_string(), 2)]);
+
+        let tag_values: Vec<String> = events
+            .filter(id.eq(1_i64))
+            .select(tags)
+            .first(&mut conn)?;
+        assert_eq!(
+            tag_values,
+            vec!["paid".to_string(), "mobile".to_string()]
+        );
+
+        let attrs_map: BTreeMap<String, String> = events
+            .filter(id.eq(1_i64))
+            .select(attrs)
+            .first(&mut conn)?;
+        assert_eq!(
+            attrs_map,
+            BTreeMap::from([
+                ("country".to_string(), "US".to_string()),
+                ("plan".to_string(), "pro".to_string()),
+            ])
+        );
+
+        let created_at_value: String = events
+            .filter(id.eq(1_i64))
+            .select(created_at)
+            .first(&mut conn)?;
+        assert_eq!(created_at_value, "2024-01-01 00:10:00");
+
+        let network_row = diesel::sql_query(
+            "SELECT toUUID('550e8400-e29b-41d4-a716-446655440000') AS uuid_value, toIPv4('192.0.2.1') AS ipv4_value, toIPv6('2001:db8::1') AS ipv6_value",
+        )
+        .get_result::<ConnectionNetworkRow>(&mut conn)?;
+        assert_eq!(
+            network_row,
+            ConnectionNetworkRow {
+                row_uuid: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                row_ipv4: "192.0.2.1".to_string(),
+                row_ipv6: "2001:db8::1".to_string(),
+            }
+        );
+
+        let tuple_value: (String, i64) = diesel::select(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::Tuple<(diesel::sql_types::Text, diesel::sql_types::BigInt)>,
+        >("tuple('north', toInt64(7))"))
+        .get_result(&mut conn)?;
+        assert_eq!(tuple_value, ("north".to_string(), 7));
+
+        let tuple_array: Vec<(String, i64)> = diesel::select(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::Tuple<(
+                diesel::sql_types::Text,
+                diesel::sql_types::BigInt,
+            )>>,
+        >("[('north', toInt64(7)), ('south', toInt64(9))]"))
+        .get_result(&mut conn)?;
+        assert_eq!(
+            tuple_array,
+            vec![("north".to_string(), 7), ("south".to_string(), 9)]
+        );
+
+        let decimal_value: String = diesel::select(diesel::dsl::sql::<
+            diesel_clickhouse::sql_types::Decimal64<2>,
+        >("toDecimal64(123.45, 2)"))
+        .get_result(&mut conn)?;
+        assert_eq!(decimal_value, "123.45");
+
+        let maybe_value: Option<String> = diesel::select(diesel::dsl::sql::<
+            diesel::sql_types::Nullable<diesel::sql_types::Text>,
+        >("NULL"))
+        .get_result(&mut conn)?;
+        assert_eq!(maybe_value, None);
+
+        let nullable_scalars: (Option<i32>, Option<bool>, Option<String>) = diesel::select((
+            diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>(
+                "toNullable(toInt32(42))",
+            ),
+            diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Bool>>(
+                "CAST(NULL, 'Nullable(Bool)')",
+            ),
+            diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Text>>(
+                "toNullable('semi;colon?')",
+            ),
+        ))
+        .get_result(&mut conn)?;
+        assert_eq!(
+            nullable_scalars,
+            (Some(42), None, Some("semi;colon?".to_string()))
+        );
+
+        let nullable_composites = diesel::sql_query(
+            "SELECT [toNullable('paid'), NULL, toNullable('mobile')] AS nullable_tags, map('present', toNullable(toInt32(7)), 'missing', CAST(NULL, 'Nullable(Int32)')) AS nullable_attrs, tuple('north', CAST(NULL, 'Nullable(Int64)')) AS nullable_tuple",
+        )
+        .get_result::<ConnectionNullableCompositeRow>(&mut conn)?;
+        assert_eq!(
+            nullable_composites,
+            ConnectionNullableCompositeRow {
+                row_nullable_tags: vec![
+                    Some("paid".to_string()),
+                    None,
+                    Some("mobile".to_string()),
+                ],
+                row_nullable_attrs: BTreeMap::from([
+                    ("missing".to_string(), None),
+                    ("present".to_string(), Some(7)),
+                ]),
+                row_nullable_tuple: ("north".to_string(), None),
+            }
+        );
+
+        let semi_structured = diesel::sql_query(
+            "SELECT CAST(toUInt64(42), 'Dynamic') AS dynamic_value, CAST(toUInt64(42), 'Variant(UInt64, String)') AS variant_value SETTINGS allow_experimental_dynamic_type = 1, allow_experimental_variant_type = 1",
+        )
+        .get_result::<ConnectionSemiStructuredRow>(&mut conn)?;
+        assert_eq!(
+            semi_structured,
+            ConnectionSemiStructuredRow {
+                row_dynamic: "42".to_string(),
+                row_variant: "42".to_string(),
+            }
+        );
+
+        let literal_question_rows: Vec<String> = events
+            .filter(tenant_id.eq("acme"))
+            .select(diesel::dsl::sql::<diesel::sql_types::Text>("'literal ?'"))
+            .order(id.asc())
+            .load(&mut conn)?;
+        assert_eq!(literal_question_rows, vec!["literal ?".to_string(); 3]);
+
+        diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_spike")
+            .execute(&mut conn)?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_connection_spike (id Int64, tenant_id String) ENGINE = Memory",
+        )
+        .execute(&mut conn)?;
+        diesel::sql_query(
+            "INSERT INTO diesel_clickhouse_connection_spike VALUES (1, 'acme'), (2, 'beta')",
+        )
+        .execute(&mut conn)?;
+        let sql_rows = diesel::sql_query(
+            "SELECT id, tenant_id FROM diesel_clickhouse_connection_spike ORDER BY id",
+        )
+        .load::<ConnectionRow>(&mut conn)?;
+        assert_eq!(
+            sql_rows,
+            vec![
+                ConnectionRow {
+                    row_id: 1,
+                    row_tenant_id: "acme".to_string(),
+                },
+                ConnectionRow {
+                    row_id: 2,
+                    row_tenant_id: "beta".to_string(),
+                },
+            ]
+        );
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_spike").execute(&mut conn)?;
+
+        conn.batch_execute(
+            r#"
+            DROP TABLE IF EXISTS diesel_clickhouse_connection_batch;
+            CREATE TABLE diesel_clickhouse_connection_batch (id Int64, tenant_id String) ENGINE = Memory;
+            INSERT INTO diesel_clickhouse_connection_batch VALUES (1, 'literal;with;semicolons');
+            INSERT INTO diesel_clickhouse_connection_batch VALUES (2, 'escaped \' quote; still literal');
+            -- trailing comment with a semicolon ; should not become a statement
+            "#,
+        )?;
+        let batch_rows = diesel::sql_query(
+            "SELECT id, tenant_id FROM diesel_clickhouse_connection_batch ORDER BY id",
+        )
+        .load::<ConnectionRow>(&mut conn)?;
+        assert_eq!(
+            batch_rows,
+            vec![
+                ConnectionRow {
+                    row_id: 1,
+                    row_tenant_id: "literal;with;semicolons".to_string(),
+                },
+                ConnectionRow {
+                    row_id: 2,
+                    row_tenant_id: "escaped ' quote; still literal".to_string(),
+                },
+            ]
+        );
+        conn.batch_execute("DROP TABLE diesel_clickhouse_connection_batch; /* done ; */")?;
+        Ok(())
+    })
+    .await??;
 
     let ddl = create_table("diesel_clickhouse_ddl_events")
         .if_not_exists()

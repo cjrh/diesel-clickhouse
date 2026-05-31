@@ -15,9 +15,9 @@ Legend:
 | Status | Feature | Example DSL | Notes |
 | --- | --- | --- | --- |
 | ✅ | ClickHouse backend marker and query builder | `to_sql(&query)?` | Backtick identifiers, `?` placeholders. |
-| ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Render-only; no `Connection` yet. |
+| ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Still useful for inspection and external-client execution. |
 | 🧪 | Execute rendered SQL via `clickhouse` crate | `client.query(&to_sql(&query)?).bind(...).fetch_all()` | Live Docker test validates this workflow. |
-| ⬜ | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Larger architecture decision; not started. |
+| 🚧 🧪 | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Initial HTTP-backed `ClickHouseConnection` supports `establish`, `load`, `execute`, `batch_execute`, primitive/text/nullable rows, `Array<T>` into `Vec<T>`, `Map<K,V>` into `BTreeMap<K,V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant decoding, and `sql_query`; transactions are explicitly unsupported and richer binary/native-decimal coverage is pending. |
 
 ## ClickHouse SQL types
 

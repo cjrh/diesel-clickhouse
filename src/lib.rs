@@ -34,10 +34,10 @@
 //!
 //! ## Scope
 //!
-//! This crate currently focuses on **building ClickHouse SQL from Diesel ASTs**.
-//! It does not yet provide a Diesel [`Connection`](diesel::Connection)
-//! implementation.  Execute the rendered SQL through your ClickHouse client of
-//! choice, or use the expression/fragment types in a future connection adapter.
+//! This crate focuses on **building ClickHouse SQL from Diesel ASTs** and now
+//! includes an initial HTTP-backed [`ClickHouseConnection`] for idiomatic Diesel
+//! `load`/`execute`/`batch_execute` workflows. You can still execute rendered SQL through your
+//! ClickHouse client of choice when you need client-specific behavior.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_root_url = "https://docs.rs/diesel-clickhouse/0.1.0")]
@@ -46,6 +46,7 @@ mod aggregates;
 mod backend;
 mod cast;
 mod clauses;
+mod connection;
 mod ddl;
 mod functions;
 mod grouping;
@@ -77,6 +78,10 @@ pub use clauses::{
     WithCteBinding, WithQuery, array_join_clause, array_join_clause_as, final_table, format,
     into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col, prewhere,
     sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
+};
+pub use connection::{
+    ClickHouseConnection, ClickHouseCursor, ClickHouseField, ClickHouseRow,
+    ClickHouseTransactionManager,
 };
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,

@@ -16,10 +16,12 @@ categories = ["database"]
 # surface. Keep the upper bound explicit: each Diesel minor can alter backend
 # internals and should be validated before widening this range.
 diesel = { version = ">=2.2, <2.3", default-features = false, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes", "with-deprecated"] }
+clickhouse = "=0.13.3"
+tokio = { version = "1", features = ["rt"] }
+url = "2"
 
 [dev-dependencies]
 # Pinned to the newest releases that still support this crate's current MSRV.
-clickhouse = "=0.13.3"
 testcontainers = "=0.25.0"
 testcontainers-modules = { version = "=0.13.0", features = ["clickhouse"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }

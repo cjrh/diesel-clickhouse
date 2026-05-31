@@ -1,6 +1,27 @@
-# Future Diesel `Connection` design notes
+# Diesel `Connection` design notes
 
-The current crate intentionally stops at SQL rendering. This document records the design constraints for a later Diesel `Connection` implementation so the render layer can remain stable and the connection work can start from explicit trade-offs.
+The crate now includes an initial HTTP-backed `ClickHouseConnection`. This document records the design constraints, current scope, and remaining work so the connection can evolve without pretending ClickHouse is a regular transactional OLTP backend.
+
+## Current spike
+
+Implemented and live-tested:
+
+- `ClickHouseConnection::establish("http://user:password@host:8123/database")`.
+- Idiomatic Diesel `load`, `first`, and `execute` over ClickHouse HTTP.
+- Diesel bind collection for primitive/text values, inlined as escaped ClickHouse literals while preserving literal `?` characters in SQL strings/comments.
+- Row loading through `TabSeparatedWithNamesAndTypes` into Diesel `Row`/`Field` abstractions.
+- Primitive numeric, bool, text, binary, and nullable row decoding.
+- `Array<T>` row decoding into `Vec<T>`, `Map<K, V>` row decoding into `BTreeMap<K, V>`, and `Tuple<...>` row decoding into Rust tuples.
+- String-form Decimal/Date/DateTime/UUID/IP/JSON decoding for ClickHouse text formats.
+- `diesel::sql_query(...)` with `QueryableByName`.
+- Explicit unsupported transaction errors.
+
+Remaining limitations:
+
+- `execute` returns `0` affected rows because ClickHouse HTTP does not provide Diesel-style affected counts for DDL/mutations.
+- Bind inlining is textual; true binary vector parameters still need a richer transport representation.
+- Complex ClickHouse values such as native decimal representations, `Dynamic`, `Variant`, and aggregate states need expanded `FromSql`/`ToSql` coverage.
+- `batch_execute` uses a small SQL-aware splitter for migration-style batches; it respects semicolons in quoted literals and comments but is not intended to be a full ClickHouse SQL parser.
 
 ## Goals
 
@@ -44,21 +65,21 @@ Cons:
 - More implementation work and a larger maintenance surface.
 - Requires selecting or writing a native client layer with stable APIs.
 
-Initial recommendation: prototype HTTP first because it validates the Diesel integration shape with the least new infrastructure. Keep the connection boundary narrow enough that a native protocol can replace the transport later.
+Current recommendation: continue hardening the HTTP implementation because it validates the Diesel integration shape with the least new infrastructure. Keep the connection boundary narrow enough that a native protocol can replace the transport later.
 
 ## Bind collection
 
-The render layer currently emits `?` placeholders. A `Connection` implementation needs a bind collector that stores values in order and passes them to the transport in a representation ClickHouse accepts.
+The render layer emits `?` placeholders. The current connection collects Diesel binds, uses backend type metadata to decide whether a value needs ClickHouse string-literal escaping, and inlines those values before sending SQL over HTTP. Any remaining literal `?` characters are escaped for the underlying `clickhouse` client so they are not mistaken for unbound client parameters.
 
 Open questions:
 
-- Whether to continue using `?` placeholders or render ClickHouse server-side parameters (`{name: Type}`) internally.
+- Whether to keep textual bind inlining long term or render ClickHouse server-side parameters (`{name: Type}`) internally.
 - How to preserve type information for arrays, maps, decimals, UUIDs, IPv4/IPv6, aggregate states, vectors, `Dynamic`, and `Variant`.
 - How to support true binary binds for `reinterpret(binary, 'Array(Float32)')` vector helpers.
 
 ## Loading rows
 
-Diesel's `Queryable`/`FromSql` path will need ClickHouse `RawValue` values that line up with Diesel SQL types. The current serialization/deserialization support is intentionally textual and minimal; a connection implementation will likely need richer `FromSql` implementations backed by RowBinary or native protocol values.
+Diesel's `Queryable`/`FromSql` path needs ClickHouse `RawValue` values that line up with Diesel SQL types. The current connection decodes `TabSeparatedWithNamesAndTypes` into owned row fields, which is simple and debuggable but not the final word for every ClickHouse type. Richer `FromSql` implementations may later be backed by RowBinary or native protocol values.
 
 Priority row types:
 
@@ -80,11 +101,42 @@ Transactions should probably be one of:
 
 The first implementation should prefer explicit unsupported errors over surprising partial behavior.
 
+## Active TODOs before treating `Connection` as stable
+
+Use this list as the post-context-clear implementation plan. Keep `docs/FEATURE_MATRIX.md` as the canonical feature-status table, but update this section while hardening `ClickHouseConnection`.
+
+1. **Native decimal story**
+   - Decide whether to add an optional `bigdecimal` or `rust_decimal` feature, or keep decimal loading string-first.
+   - If a native decimal feature is added, cover `Numeric` and `Decimal32/64/128/256` with live tests.
+
+2. **Bind strategy**
+   - Current implementation collects Diesel binds and inlines escaped ClickHouse literals.
+   - Investigate ClickHouse server-side parameters (`{name: Type}`) as a safer long-term HTTP path.
+   - Preserve good Diesel ergonomics: ordinary `.filter(col.eq(value))` should continue to work.
+   - Keep true binary vector parameters on the list; current HTTP/text path still cannot prove them.
+
+3. **More connection live tests**
+   - Nullable scalar combinations through `ClickHouseConnection` are covered.
+   - Nullable arrays/maps/tuples are covered for ergonomic Diesel targets.
+   - `Dynamic` and `Variant` are covered with required experimental settings.
+   - Raw SQL structs via `QueryableByName` are covered for the supported semi-structured/composite cases.
+   - Aggregate states only if we expose a concrete Rust representation.
+
+4. **`batch_execute` semantics**
+   - Replaced the original string split with a small SQL-aware migration splitter.
+   - Keep the documented scope narrow: it respects quoted semicolons and comments, but it is not a complete ClickHouse SQL parser.
+
+5. **Connection options/settings API**
+   - Consider constructors/builders for user/password/database/options instead of only URL parsing and `with_client`.
+   - Do not silently inject ClickHouse settings that alter semantics; make defaults explicit.
+
+6. **Protocol boundary**
+   - Continue hardening HTTP first.
+   - Keep row loading and bind collection isolated enough that a native protocol transport can replace HTTP later if binary fidelity becomes necessary.
+
 ## Suggested implementation order
 
-1. Prototype `ClickHouseConnection` over HTTP for simple `SELECT` loading of primitives.
-2. Add bind collection for primitive placeholders.
-3. Add `execute` for DDL and mutations.
-4. Expand `FromSql`/`ToSql` coverage based on existing live-test types.
-5. Add transaction/metadata APIs as explicit unsupported stubs where ClickHouse cannot match Diesel expectations.
-6. Revisit native protocol only after the public `Connection` API shape is proven.
+1. Decide native decimal feature direction; implement only if the added dependency/feature is worth it.
+2. Investigate ClickHouse server-side parameter rendering and compare against current bind inlining.
+3. Add connection builder/options ergonomics.
+4. Revisit native protocol only after the HTTP-backed public API shape is proven.

@@ -2,7 +2,7 @@
 
 Diesel query-builder extensions for ClickHouse SQL.
 
-This crate currently provides a lightweight `ClickHouse` backend for rendering Diesel ASTs as ClickHouse SQL, plus typed helpers for common ClickHouse functions and clauses. It does **not** yet provide a Diesel `Connection` implementation.
+This crate provides a lightweight `ClickHouse` backend for rendering Diesel ASTs as ClickHouse SQL, typed helpers for common ClickHouse functions and clauses, and an initial HTTP-backed Diesel `Connection` implementation for idiomatic `load`/`execute` workflows.
 
 ```rust,ignore
 use diesel::prelude::*;
@@ -25,6 +25,7 @@ let sql = to_sql(&query)?;
 ## Implemented so far
 
 - `ClickHouse` backend marker and query builder (`?` binds, backtick identifiers)
+- Initial `ClickHouseConnection` over ClickHouse HTTP for Diesel `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable rows, arrays into `Vec<T>`, maps into `BTreeMap<K, V>`, tuples into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, and `sql_query`; transactions intentionally return an unsupported error
 - SQL type markers: unsigned/wide integers, decimals, enums, tuples/nested, arrays, maps, low-cardinality, JSON, UUID, IPv4/IPv6, Point/Ring, Dynamic/Variant, BFloat16, AggregateFunction states, DateTime64
 - Function bindings via Diesel macros/custom fragments: `toStartOf*`, `toDateTime*`, `dateDiff`, `dateTrunc`, broad type conversions/`CAST`/`accurateCast*`, string/numeric/search helpers (`LIKE`/`ILIKE`, `match`, `multiMatch*`), URL/IP/encoding/hash helpers, vector distance and binary-reference helpers, lambda-based array/map helpers, `if`, `countIf`, `sumIf`, `avgIf`, `minIf`, `maxIf`, generic aggregate combinator builder, aggregate state/merge combinators, `uniq*`, `groupArray*`, `any*`, `argMax`, `argMin`, statistical aggregates (`stddev*`, `var*`, ANOVA, Mann-Whitney, `approx_top_sum`), array/map/JSON path helpers
 - Parametric/statistical aggregate fragments: `quantile*`, `quantiles*`, `quantileDeterministic`, `topK`, `histogram`, `corr`, `covar*`
@@ -36,11 +37,11 @@ let sql = to_sql(&query)?;
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
 - `GLOBAL IN` / `GLOBAL NOT IN` operators
 
-See `docs/USAGE.md` for usage guidance, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for the future `Connection` plan.
+See `docs/USAGE.md` for usage guidance, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for connection design notes.
 
 ## Live ClickHouse tests
 
-The integration battery in `tests/live_clickhouse.rs` starts a real `clickhouse/clickhouse-server` container with `testcontainers`, creates a scratch `ReplacingMergeTree` table, executes SQL rendered by this crate through the official `clickhouse` Rust client, and lets testcontainers tear the container down when the test exits.
+The integration battery in `tests/live_clickhouse.rs` starts a real `clickhouse/clickhouse-server` container with `testcontainers`, creates scratch tables, executes SQL rendered by this crate through the official `clickhouse` Rust client, verifies `ClickHouseConnection` against the same live server, and lets testcontainers tear the container down when the test exits.
 
 It is ignored by default so ordinary `cargo test` does not require Docker:
 

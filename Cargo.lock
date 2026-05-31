@@ -457,6 +457,7 @@ dependencies = [
  "testcontainers-modules",
  "tokio",
  "trybuild",
+ "url",
 ]
 
 [[package]]
