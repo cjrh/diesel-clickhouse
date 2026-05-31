@@ -89,10 +89,18 @@ That runs default and `bigdecimal` tests, live ClickHouse tests, and clippy.
 
 ## Releasing
 
-Releases are cut with [`cargo release`](https://github.com/crate-ci/cargo-release). The cargo-release configuration bumps the version and pushes a `vX.Y.Z` tag; the GitHub release workflow publishes that tag to crates.io.
+Releases are cut with [`cargo release`](https://github.com/crate-ci/cargo-release). The cargo-release configuration updates the changelog, creates a release commit and `vX.Y.Z` tag, and pushes them. Publishing is handled by the GitHub release workflow when that tag is pushed.
+
+For the initial `0.1.0` release, the version is already set:
 
 ```bash
-cargo release patch --execute   # or: minor / major
+cargo release --execute
+```
+
+For later releases, pass the semver bump or explicit version:
+
+```bash
+cargo release patch --execute   # or: minor / major / 0.2.0
 ```
 
 The release workflow expects a `CARGO_REGISTRY_TOKEN` repository secret.
