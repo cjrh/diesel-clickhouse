@@ -36,7 +36,7 @@ let sql = to_sql(&query)?;
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
 - `GLOBAL IN` / `GLOBAL NOT IN` operators
 
-See `tests/sql_render.rs` for render examples and `docs/FEATURE_MATRIX.md` for the implementation checklist.
+See `docs/USAGE.md` for usage guidance, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for the future `Connection` plan.
 
 ## Live ClickHouse tests
 
