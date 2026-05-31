@@ -35,7 +35,7 @@ Legend:
 | ✅ | `Nothing` | `Nothing` |
 | ✅ 🧪 | Aggregate state values | `AggregateFunction<T>`, DDL `DataType::aggregate_function("sum", [DataType::Float64])` |
 | ✅ 🧪 | Vector embeddings | `Array<Float>`/`Array<Double>` columns, `vector_f32([..])`, `vector_f64([..])` |
-| ➡️ | Nullable values | Diesel's `Nullable<T>` |
+| ✅ 🧪 | Nullable values | Diesel's `Nullable<T>`, `.is_null()`, `.is_not_null()` |
 | ✅ 🧪 | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256`; DDL `DataType::{UInt128, UInt256, Int128, Int256}` |
 | ✅ 🧪 | Decimal families | `Decimal32<S>`, `Decimal64<S>`, `Decimal128<S>`, `Decimal256<S>`; DDL `DataType::decimal64(4)` |
 | ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>`, `Nested<...>`, `Enum8`, `Enum16`; DDL `DataType::tuple(...)`, `DataType::nested(...)`, `DataType::enum8(...)` |
@@ -52,10 +52,10 @@ Legend:
 | ✅ 🧪 | `ARRAY JOIN` | `events.array_join_as(tags, "tag")` | `ARRAY JOIN tags AS tag` |
 | ✅ | `LEFT ARRAY JOIN` | `events.left_array_join_as(tags, "tag")` | `LEFT ARRAY JOIN tags AS tag` |
 | ✅ 🧪 | Scalar `WITH` aliases | `diesel::select(sql("x")).with_alias(sql("1"), "x")` | `WITH 1 AS x SELECT x` |
-| ➡️ | `WHERE` | `events.filter(tenant_id.eq("acme"))` | Diesel built-in. |
-| ➡️ | `HAVING` | `query.having(count_star.gt(1))` | Diesel built-in; add ClickHouse examples. |
-| ➡️ | `ORDER BY` | `query.order(created_at.desc())` | Diesel built-in. |
-| ➡️ | `LIMIT` / `OFFSET` | `query.limit(10).offset(20)` | Diesel built-in. |
+| ✅ 🧪 | `WHERE` | `events.filter(tenant_id.eq("acme").and(success.eq(true)))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
+| ✅ 🧪 | `HAVING` | `query.having(count_star().gt(1))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
+| ✅ 🧪 | `ORDER BY` | `query.order(created_at.desc())` | Diesel built-in, covered with ClickHouse rendering/live examples. |
+| ✅ 🧪 | `LIMIT` / `OFFSET` | `query.limit(10).offset(20)` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ 🧪 | `LIMIT ... WITH TIES` | `query.limit(1).with_ties()` | `LIMIT ? WITH TIES` |
 | ✅ 🧪 | `LIMIT BY` | `query.limit_by_col(2, "tenant_id")` | `LIMIT 2 BY tenant_id` |
 | ✅ 🧪 | `SETTINGS` | `query.settings([Setting::new("max_threads", 1)])` | `SETTINGS max_threads = 1` |
@@ -71,7 +71,7 @@ Legend:
 
 | Status | Feature | Example DSL | SQL shape |
 | --- | --- | --- | --- |
-| ➡️ | Plain `GROUP BY` | `query.group_by(tenant_id)` | Diesel built-in. |
+| ✅ 🧪 | Plain `GROUP BY` | `query.group_by(tenant_id)` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ | `WITH TOTALS` | `query.group_by(with_totals(tenant_id))` | `GROUP BY tenant_id WITH TOTALS` |
 | ✅ 🧪 | `ROLLUP` | `query.group_by(rollup((tenant_id, success)))` | `GROUP BY ROLLUP(tenant_id, success)` |
 | ✅ | `CUBE` | `query.group_by(cube((tenant_id, success)))` | `GROUP BY CUBE(tenant_id, success)` |
@@ -83,7 +83,7 @@ Legend:
 
 | Status | Feature | Example DSL | Notes |
 | --- | --- | --- | --- |
-| ➡️ | ANSI joins | Diesel `.inner_join`, `.left_join` | Need ClickHouse examples and live tests. |
+| ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression, so executable ClickHouse joins should use `clickhouse_join(...)`. |
 | ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; raw select expressions currently required. |
 | ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse `[GLOBAL] [ANY|ALL|ASOF] [INNER|LEFT|...] JOIN`. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
@@ -95,7 +95,7 @@ Legend:
 | --- | --- | --- |
 | ✅ | `GLOBAL IN` | `tenant_id.global_in(subquery)` |
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
-| ➡️ | Regular comparison/logical operators | Diesel built-ins. |
+| ✅ 🧪 | Regular comparison/logical operators | Diesel `.eq()`, `.gt()`, `.and()`, `.or()` built-ins. |
 | ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
 | ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()`, ClickHouse `.ilike()` / `.not_ilike()`, function helpers `like`, `like_escape`, `ilike`, `not_ilike`, `regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*`. |
 

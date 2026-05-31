@@ -113,6 +113,16 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(events -> tenants (tenant_id));
+diesel::allow_tables_to_appear_in_same_query!(
+    events,
+    tenants,
+    tenant_rates,
+    aggregate_states,
+    mv_source,
+    image_vectors
+);
+
 struct ClickHouseFixture {
     _node: ContainerAsync<ClickHouseImage>,
     client: clickhouse::Client,
@@ -205,6 +215,42 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
 
     let fixture = start_clickhouse().await?;
     setup(&fixture.client).await?;
+
+    let native_sql = to_sql(
+        &events
+            .filter(
+                tenant_id
+                    .eq("acme")
+                    .and(success.eq(true).or(latency_ms.gt(25.0))),
+            )
+            .group_by(tenant_id)
+            .having(diesel::dsl::count_star().gt(1_i64))
+            .select((tenant_id, diesel::dsl::count_star()))
+            .order(tenant_id.asc())
+            .limit(1)
+            .offset(0),
+    )?;
+    let native_rows: Vec<(String, u64)> = fixture
+        .client
+        .query(&native_sql)
+        .bind("acme")
+        .bind(true)
+        .bind(25.0)
+        .bind(1_i64)
+        .bind(1_i64)
+        .bind(0_i64)
+        .fetch_all()
+        .await?;
+    assert_eq!(native_rows, vec![("acme".to_string(), 2)]);
+
+    let nullable_sql = to_sql(&diesel::select((
+        diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("NULL")
+            .is_null(),
+        diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("NULL")
+            .is_not_null(),
+    )))?;
+    let nullable_row: (bool, bool) = fixture.client.query(&nullable_sql).fetch_one().await?;
+    assert_eq!(nullable_row, (true, false));
 
     let ddl = create_table("diesel_clickhouse_ddl_events")
         .if_not_exists()

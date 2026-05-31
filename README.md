@@ -29,8 +29,9 @@ let sql = to_sql(&query)?;
 - Function bindings via Diesel macros/custom fragments: `toStartOf*`, `toDateTime*`, `dateDiff`, `dateTrunc`, broad type conversions/`CAST`/`accurateCast*`, string/numeric/search helpers (`LIKE`/`ILIKE`, `match`, `multiMatch*`), URL/IP/encoding/hash helpers, vector distance and binary-reference helpers, lambda-based array/map helpers, `if`, `countIf`, `sumIf`, `avgIf`, `minIf`, `maxIf`, generic aggregate combinator builder, aggregate state/merge combinators, `uniq*`, `groupArray*`, `any*`, `argMax`, `argMin`, statistical aggregates (`stddev*`, `var*`, ANOVA, Mann-Whitney, `approx_top_sum`), array/map/JSON path helpers
 - Parametric/statistical aggregate fragments: `quantile*`, `quantiles*`, `quantileDeterministic`, `topK`, `histogram`, `corr`, `covar*`
 - Grouping modifiers: `WITH TOTALS`, `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUP BY ALL`, `GROUPING()`
+- Diesel-native query clauses covered for ClickHouse rendering: `WHERE`, `HAVING`, `ORDER BY`, `GROUP BY`, `LIMIT`/`OFFSET`, nullable predicates, and comparison/logical operators
 - Query wrappers for scalar `WITH` aliases, CTEs, `QUALIFY`, named `WINDOW`, `LIMIT BY`, `LIMIT ... WITH TIES`, `ORDER BY ... WITH FILL`, `SETTINGS`, `FORMAT`, `INTO OUTFILE`
-- Source wrappers for `FINAL`, `SAMPLE`, `SAMPLE ... OFFSET`, `PREWHERE`, `ARRAY JOIN`, `LEFT ARRAY JOIN`, ClickHouse `GLOBAL`/`ANY`/`ALL`/`ASOF`/`SEMI`/`ANTI` joins
+- Source wrappers for `FINAL`, `SAMPLE`, `SAMPLE ... OFFSET`, `PREWHERE`, `ARRAY JOIN`, `LEFT ARRAY JOIN`, ClickHouse `GLOBAL`/`ANY`/`ALL`/`ASOF`/`SEMI`/`ANTI` joins; use these join wrappers for executable ClickHouse join SQL rather than Diesel's parenthesized built-in join source rendering
 - Window helpers: `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `.over(...)`, `.over_window(...)`, `ROWS`/`RANGE` frame builders
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
 - `GLOBAL IN` / `GLOBAL NOT IN` operators

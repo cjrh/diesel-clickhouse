@@ -80,6 +80,9 @@ diesel::table! {
     }
 }
 
+diesel::joinable!(events -> tenants (tenant_id));
+diesel::allow_tables_to_appear_in_same_query!(events, tenants, tenant_rates, image_vectors);
+
 #[test]
 fn renders_clickhouse_functions_and_trailing_clauses() {
     use self::events::dsl::*;
@@ -95,6 +98,46 @@ fn renders_clickhouse_functions_and_trailing_clauses() {
     assert_eq!(
         to_sql(&query).unwrap(),
         "SELECT `events`.`tenant_id`, countIf(`events`.`success`), quantile(0.95)(`events`.`latency_ms`) FROM `events` WHERE (`events`.`tenant_id` = ?) GROUP BY `events`.`tenant_id` ORDER BY `events`.`tenant_id` DESC LIMIT 10 BY `tenant_id` FORMAT JSONEachRow"
+    );
+}
+
+#[test]
+fn renders_diesel_native_clickhouse_features() {
+    use self::events::dsl::*;
+
+    let builtin_query = events
+        .filter(
+            tenant_id
+                .eq("acme")
+                .and(success.eq(true).or(latency_ms.gt(25.0))),
+        )
+        .group_by(tenant_id)
+        .having(diesel::dsl::count_star().gt(1_i64))
+        .select((tenant_id, diesel::dsl::count_star()))
+        .order(tenant_id.asc())
+        .limit(5)
+        .offset(10);
+    let nullable_query = diesel::select((
+        diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("NULL")
+            .is_null(),
+        diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("NULL")
+            .is_not_null(),
+    ));
+    let ansi_join_query = events
+        .inner_join(tenants::table.on(tenant_id.eq(tenants::tenant_id)))
+        .select((tenant_id, tenants::plan));
+
+    assert_eq!(
+        to_sql(&builtin_query).unwrap(),
+        "SELECT `events`.`tenant_id`, COUNT(*) FROM `events` WHERE ((`events`.`tenant_id` = ?) AND ((`events`.`success` = ?) OR (`events`.`latency_ms` > ?))) GROUP BY `events`.`tenant_id` HAVING (COUNT(*) > ?) ORDER BY `events`.`tenant_id` ASC LIMIT ? OFFSET ?"
+    );
+    assert_eq!(
+        to_sql(&nullable_query).unwrap(),
+        "SELECT (NULL IS NULL), (NULL IS NOT NULL)"
+    );
+    assert_eq!(
+        to_sql(&ansi_join_query).unwrap(),
+        "SELECT `events`.`tenant_id`, `tenants`.`plan` FROM (`events` INNER JOIN `tenants` ON (`events`.`tenant_id` = `tenants`.`tenant_id`))"
     );
 }
 
