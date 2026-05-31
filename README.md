@@ -56,7 +56,13 @@ diesel-clickhouse = { version = "0.1", features = ["bigdecimal"] }
 
 ## Tutorial
 
-The NYC taxi tutorial in `docs/TUTORIAL.md` shows ClickHouse SQL alongside equivalent Diesel code. It has an executable companion that can run the tutorial against ClickHouse and write a Markdown report with observed results:
+The NYC taxi tutorial in `docs/TUTORIAL.md` shows ClickHouse SQL alongside equivalent Diesel code. It has an executable companion that can run the tutorial against a disposable ClickHouse container and write a Markdown report with observed results:
+
+```bash
+just tutorial
+```
+
+If you already have ClickHouse running, call the example directly:
 
 ```bash
 CLICKHOUSE_URL=http://default:password@localhost:8123/default \

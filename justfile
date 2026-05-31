@@ -19,6 +19,49 @@ test-examples:
 test-bigdecimal:
     cargo test --features bigdecimal
 
+# Run the NYC taxi tutorial against a disposable ClickHouse container.
+tutorial output="docs/TUTORIAL.md":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    container="diesel-clickhouse-tutorial"
+    image="clickhouse/clickhouse-server:25.3"
+    password="password"
+
+    cleanup() {
+        docker rm -f "$container" >/dev/null 2>&1 || true
+    }
+    cleanup
+    trap cleanup EXIT
+
+    docker run -d --name "$container" \
+        -p 127.0.0.1::8123 \
+        -e CLICKHOUSE_PASSWORD="$password" \
+        --ulimit nofile=262144:262144 \
+        "$image" >/dev/null
+
+    host_port="$(docker port "$container" 8123/tcp | sed 's/.*://')"
+    root_url="http://default:${password}@127.0.0.1:${host_port}"
+    clickhouse_url="${root_url}/default"
+
+    echo "Waiting for ClickHouse at ${root_url} ..."
+    ready=0
+    for _ in {1..90}; do
+        if curl -fsS "${root_url}/?query=SELECT%201" >/dev/null 2>&1; then
+            ready=1
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "$ready" != 1 ]]; then
+        docker logs --tail 80 "$container" >&2 || true
+        exit 1
+    fi
+
+    CLICKHOUSE_URL="$clickhouse_url" cargo run --example tutorial -- --write '{{output}}'
+    echo "Tutorial Markdown written to {{output}}"
+
 # Live integration tests. The test harness starts ClickHouse with testcontainers.
 test-live:
     cargo test --test live_clickhouse -- --ignored --nocapture
