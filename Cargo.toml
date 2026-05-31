@@ -38,3 +38,23 @@ doctest = false
 [package.metadata.docs.rs]
 all-features = true
 rustdoc-args = ["--cfg", "docsrs"]
+
+[package.metadata.release]
+# Release tags trigger .github/workflows/release.yml, which publishes the crate.
+# Keep cargo-release responsible for version bumping, changelog replacement,
+# tagging, and pushing only.
+publish = false
+tag-name = "v{{version}}"
+
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = '## \[Unreleased\]'
+replace = '''## [Unreleased]
+
+## [{{version}}] — {{date}}'''
+
+[[package.metadata.release.pre-release-replacements]]
+file = "CHANGELOG.md"
+search = '\[Unreleased\]: https://github\.com/cjrh/diesel-clickhouse/compare/v[^\n]+'
+replace = '''[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v{{version}}...HEAD
+[{{version}}]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v{{version}}'''

@@ -37,7 +37,31 @@ let sql = to_sql(&query)?;
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
 - `GLOBAL IN` / `GLOBAL NOT IN` operators
 
-See `docs/USAGE.md` for usage guidance, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for connection design notes.
+See `docs/USAGE.md` for usage guidance, `docs/TUTORIAL.md` for a ClickHouse NYC taxi tutorial translated to Diesel, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for connection design notes.
+
+## Installation
+
+```toml
+[dependencies]
+diesel-clickhouse = "0.1"
+diesel = { version = "2.2", default-features = false }
+```
+
+Enable native BigDecimal decimal values when needed:
+
+```toml
+[dependencies]
+diesel-clickhouse = { version = "0.1", features = ["bigdecimal"] }
+```
+
+## Tutorial
+
+The NYC taxi tutorial in `docs/TUTORIAL.md` shows ClickHouse SQL alongside equivalent Diesel code. It has an executable companion that can run the tutorial against ClickHouse and write a Markdown report with observed results:
+
+```bash
+CLICKHOUSE_URL=http://default:password@localhost:8123/default \
+  cargo run --example tutorial -- --write docs/TUTORIAL.md
+```
 
 ## Live ClickHouse tests
 
@@ -48,3 +72,30 @@ It is ignored by default so ordinary `cargo test` does not require Docker:
 ```bash
 cargo test --test live_clickhouse -- --ignored --nocapture
 ```
+
+The repo also ships a `justfile` for local validation:
+
+```bash
+just ci
+```
+
+That runs default and `bigdecimal` tests, live ClickHouse tests, and clippy.
+
+## Releasing
+
+Releases are cut with [`cargo release`](https://github.com/crate-ci/cargo-release). The cargo-release configuration bumps the version and pushes a `vX.Y.Z` tag; the GitHub release workflow publishes that tag to crates.io.
+
+```bash
+cargo release patch --execute   # or: minor / major
+```
+
+The release workflow expects a `CARGO_REGISTRY_TOKEN` repository secret.
+
+## License
+
+Dual-licensed under either:
+
+- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+- MIT License ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
