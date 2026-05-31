@@ -32,9 +32,9 @@ use diesel_clickhouse::{
     json_extract_int, json_extract_int_path, json_extract_string_path, json_has, json_length,
     json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower,
     mann_whitney_u_test, map_apply, map_contains, map_filter, max_if, merge_tree, min_if,
-    multi_match_any, multi_match_any_index, mutation_assignment, partition_by, partition_expr,
-    position, prewhere, projection, quantile, quantile_deterministic, quantile_exact,
-    quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    multi_match_any, multi_match_any_index, mutation_assignment, over, partition_by,
+    partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
     simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable,
     stddev_samp, substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
@@ -1364,11 +1364,9 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     assert_eq!(tied_ids, vec![2, 6]);
 
     let latest_per_tenant_sql = to_sql(
-        &events.select((tenant_id, id)).qualify(
-            row_number()
-                .over(partition_by(tenant_id).order_by(id.desc()))
-                .eq(1_i64),
-        ),
+        &events
+            .select((tenant_id, id))
+            .qualify(over(row_number(), partition_by(tenant_id).order_by(id.desc())).eq(1_i64)),
     )?;
     let mut latest_per_tenant: Vec<(String, u64)> = fixture
         .client
@@ -1389,7 +1387,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 id,
                 rank().over_window("by_latency"),
                 dense_rank().over_window("by_latency"),
-                lag_in_frame(latency_ms, 1_i64, 0.0).over(
+                over(
+                    lag_in_frame(latency_ms, 1_i64, 0.0),
                     partition_by(tenant_id)
                         .order_by(id.asc())
                         .rows_between_unbounded_preceding_and_current_row(),
@@ -1419,7 +1418,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .select((
                 tenant_id,
                 id,
-                diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)").over(
+                over(
+                    diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)"),
                     partition_by(tenant_id)
                         .order_by(id.asc())
                         .rows_between_preceding_and_following(1, 1),
@@ -1447,7 +1447,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .filter(tenant_id.eq("acme"))
             .select((
                 id,
-                diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)").over(
+                over(
+                    diesel::dsl::sql::<diesel::sql_types::Double>("sum(`latency_ms`)"),
                     partition_by(tenant_id)
                         .order_by(id.asc())
                         .range_between_preceding_and_current_row(1),

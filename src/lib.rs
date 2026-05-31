@@ -158,8 +158,8 @@ pub use window::{
     NoWindowBindings, NoWindowFrame, NoWindowOrder, NoWindowPartition, Over, OverDsl, OverWindow,
     QualifyQuery, RowsBetweenUnboundedPrecedingAndCurrentRow, WindowBinding, WindowFrame,
     WindowFrameBound, WindowFrameUnits, WindowOrder, WindowPartition, WindowQuery, WindowSpec,
-    dense_rank, first_value, lag, lag_in_frame, last_value, lead, lead_in_frame, partition_by,
-    qualify, rank, row_number, window, window_order_by,
+    dense_rank, first_value, lag, lag_in_frame, last_value, lead, lead_in_frame, over,
+    partition_by, qualify, rank, row_number, window, window_order_by,
 };
 
 /// ClickHouse SQL-type markers for use in `table!` declarations and explicit

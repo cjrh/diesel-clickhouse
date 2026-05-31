@@ -10,6 +10,12 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- Free `over(function, spec)` helper for ClickHouse window specifications, avoiding ambiguity with Diesel 2.3's no-argument `.over()` method.
+
+### Changed
+- Require Diesel 2.3 (`>=2.3, <2.4`) and Rust 1.86 to support Diesel's current backend traits.
+
 ## [0.2.1] — 2026-05-31
 
 ## [0.2.0] — 2026-05-31

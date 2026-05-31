@@ -22,13 +22,13 @@ use diesel_clickhouse::{
     map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
     multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
     multi_match_any_index, mutation_assignment, not_ilike, not_ilike_escape, not_like,
-    not_like_escape, partition_by, partition_expr, partition_id, position, prewhere, projection,
-    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
-    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
-    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
-    sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable, substring,
-    sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool, to_date_time,
-    to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
+    not_like_escape, over, partition_by, partition_expr, partition_id, position, prewhere,
+    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
+    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
+    row_number, sample, sample_offset, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable,
+    substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool,
+    to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
     to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_start_of_hour, to_string, to_uint32,
     to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, top_k, top_level_domain,
     try_base64_decode, unhex, uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper,
@@ -725,17 +725,19 @@ fn renders_with_aliases_sample_offset_and_limit_ties() {
 fn renders_window_functions_qualify_and_named_windows() {
     use self::events::dsl::*;
 
-    let qualify_query = events.select((tenant_id, id)).qualify(
-        row_number()
-            .over(partition_by(tenant_id).order_by(id.desc()))
-            .eq(1_i64),
-    );
+    let qualify_query = events
+        .select((tenant_id, id))
+        .qualify(over(row_number(), partition_by(tenant_id).order_by(id.desc())).eq(1_i64));
     let named_window_query = events
         .select((
             tenant_id,
             rank().over_window("by_tenant"),
-            dense_rank().over(partition_by(tenant_id).order_by(latency_ms.desc())),
-            lag_in_frame(latency_ms, 1_i64, 0.0).over(
+            over(
+                dense_rank(),
+                partition_by(tenant_id).order_by(latency_ms.desc()),
+            ),
+            over(
+                lag_in_frame(latency_ms, 1_i64, 0.0),
                 partition_by(tenant_id)
                     .order_by(id.asc())
                     .rows_between_unbounded_preceding_and_current_row(),
@@ -764,7 +766,8 @@ fn renders_window_frame_variants() {
 
     let rolling_rows = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("sum(`events`.`latency_ms`)").over(
+        over(
+            diesel::dsl::sql::<diesel::sql_types::Double>("sum(`events`.`latency_ms`)"),
             partition_by(tenant_id)
                 .order_by(id.asc())
                 .rows_between_preceding_and_following(1, 1),
@@ -772,7 +775,8 @@ fn renders_window_frame_variants() {
     ));
     let trailing_range = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("avg(`events`.`latency_ms`)").over(
+        over(
+            diesel::dsl::sql::<diesel::sql_types::Double>("avg(`events`.`latency_ms`)"),
             partition_by(tenant_id)
                 .order_by(latency_ms)
                 .range_between_unbounded_preceding_and_current_row(),
@@ -780,7 +784,8 @@ fn renders_window_frame_variants() {
     ));
     let generic_rows = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("max(`events`.`latency_ms`)").over(
+        over(
+            diesel::dsl::sql::<diesel::sql_types::Double>("max(`events`.`latency_ms`)"),
             partition_by(tenant_id)
                 .order_by(id)
                 .rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2)),

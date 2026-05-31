@@ -140,6 +140,14 @@ impl SqlDialect for ClickHouse {
     type ArrayComparison = sql_dialect::array_comparison::AnsiSqlArrayComparison;
     type SelectStatementSyntax = sql_dialect::select_statement_syntax::AnsiSqlSelectStatement;
     type AliasSyntax = sql_dialect::alias_syntax::AsAliasSyntax;
+    type WindowFrameClauseGroupSupport =
+        sql_dialect::window_frame_clause_group_support::NoGroupWindowFrameUnit;
+    type WindowFrameExclusionSupport =
+        sql_dialect::window_frame_exclusion_support::NoFrameFrameExclusionSupport;
+    type AggregateFunctionExpressions =
+        sql_dialect::aggregate_function_expressions::NoAggregateFunctionExpressions;
+    type BuiltInWindowFunctionRequireOrder =
+        sql_dialect::built_in_window_function_require_order::NoOrderRequired;
 }
 
 impl DieselReserveSpecialization for ClickHouse {}

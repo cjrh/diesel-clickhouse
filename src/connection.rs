@@ -12,9 +12,9 @@ use std::fmt;
 use std::ops::Range;
 
 use diesel::connection::{
-    Connection, ConnectionSealed, DefaultLoadingMode, Instrumentation, InstrumentationEvent,
-    LoadConnection, SimpleConnection, StrQueryHelper, TransactionManager, TransactionManagerStatus,
-    WithMetadataLookup, get_default_instrumentation,
+    CacheSize, Connection, ConnectionSealed, DefaultLoadingMode, Instrumentation,
+    InstrumentationEvent, LoadConnection, SimpleConnection, StrQueryHelper, TransactionManager,
+    TransactionManagerStatus, WithMetadataLookup, get_default_instrumentation,
 };
 use diesel::expression::QueryMetadata;
 use diesel::query_builder::{
@@ -296,6 +296,11 @@ impl Connection for ClickHouseConnection {
 
     fn set_instrumentation(&mut self, instrumentation: impl Instrumentation) {
         self.instrumentation = Some(Box::new(instrumentation));
+    }
+
+    fn set_prepared_statement_cache_size(&mut self, _size: CacheSize) {
+        // ClickHouseConnection sends each query over HTTP without a prepared
+        // statement cache, so Diesel's cache-size knob is intentionally a no-op.
     }
 }
 

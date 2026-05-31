@@ -128,11 +128,23 @@ pub struct OverWindow<Expr> {
     name: String,
 }
 
+/// Wrap an expression with an inline `OVER (...)` window specification.
+///
+/// Prefer this free function when `diesel::prelude::*` is in scope: Diesel 2.3
+/// also provides a no-argument `.over()` method, so method-call syntax can be
+/// ambiguous when both traits are imported.
+pub fn over<Expr, Spec>(expr: Expr, spec: Spec) -> Over<Expr, Spec>
+where
+    Expr: Expression,
+{
+    Over { expr, spec }
+}
+
 /// Fluent `.over(spec)` and `.over_window(name)` helpers for window functions.
 pub trait OverDsl: Expression + Sized {
     /// Render `self OVER (spec)`.
     fn over<Spec>(self, spec: Spec) -> Over<Self, Spec> {
-        Over { expr: self, spec }
+        over(self, spec)
     }
 
     /// Render `self OVER window_name`.
