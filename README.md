@@ -33,7 +33,7 @@ let sql = to_sql(&query)?;
 - Diesel-native query clauses covered for ClickHouse rendering: `WHERE`, `HAVING`, `ORDER BY`, `GROUP BY`, `LIMIT`/`OFFSET`, nullable predicates, and comparison/logical operators
 - Query wrappers for scalar `WITH` aliases, CTEs, `QUALIFY`, named `WINDOW`, `LIMIT BY`, `LIMIT ... WITH TIES`, `ORDER BY ... WITH FILL`, `SETTINGS`, `FORMAT`, `INTO OUTFILE`
 - Source wrappers for `FINAL`, `SAMPLE`, `SAMPLE ... OFFSET`, `PREWHERE`, `ARRAY JOIN`, `LEFT ARRAY JOIN`, ClickHouse `GLOBAL`/`ANY`/`ALL`/`ASOF`/`SEMI`/`ANTI` joins; use these join wrappers for executable ClickHouse join SQL rather than Diesel's parenthesized built-in join source rendering
-- Window helpers: `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `over(...)`, `.over_window(...)`, `ROWS`/`RANGE` frame builders
+- Window helpers: `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `.over_ch(...)`, `.over_window(...)`, `ROWS`/`RANGE` frame builders
 - DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
 - `GLOBAL IN` / `GLOBAL NOT IN` operators
 

@@ -7,13 +7,19 @@ on:
 
 jobs:
   test:
-    name: test
+    name: test (${{ matrix.rust }})
     runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        rust: ["1.86", stable]
 
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@master
         with:
+          toolchain: ${{ matrix.rust }}
           components: clippy
       - uses: Swatinem/rust-cache@v2
 
@@ -27,13 +33,17 @@ jobs:
         run: cargo test --examples
 
       - name: live ClickHouse tests
+        if: matrix.rust == 'stable'
         run: cargo test --test live_clickhouse -- --ignored --nocapture
 
       - name: live ClickHouse tests with bigdecimal
+        if: matrix.rust == 'stable'
         run: cargo test --features bigdecimal --test live_clickhouse -- --ignored --nocapture
 
       - name: clippy
+        if: matrix.rust == 'stable'
         run: cargo clippy --all-targets -- -D warnings
 
       - name: clippy with bigdecimal
+        if: matrix.rust == 'stable'
         run: cargo clippy --all-targets --features bigdecimal -- -D warnings

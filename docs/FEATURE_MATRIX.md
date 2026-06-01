@@ -62,7 +62,7 @@ Legend:
 | ✅ | `FORMAT` | `query.format(Format::JsonEachRow)` | `FORMAT JSONEachRow` |
 | ✅ 🧪 | Common table expressions | `.with_cte("name", subquery)` | `WITH name AS (SELECT ...)` |
 | ✅ | Materialized CTEs | `.with_materialized_cte("name", subquery)` | `WITH name AS MATERIALIZED (...)` |
-| ✅ 🧪 | `QUALIFY` | `query.qualify(over(row_number(), ...).eq(1))` | `QUALIFY ...` |
+| ✅ 🧪 | `QUALIFY` | `query.qualify(row_number().over_ch(...).eq(1))` | `QUALIFY ...` |
 | ✅ 🧪 | `WINDOW` clause | `query.window("w", partition_by(...).order_by(...))` | `WINDOW w AS (...)` |
 | ✅ 🧪 | `ORDER BY ... WITH FILL` | `order(with_fill(ts).from(a).to(b).step(s))` | `ORDER BY ts WITH FILL ...` |
 | ✅ | `INTO OUTFILE` | `query.into_outfile("export.csv").truncate().format(Format::Csv)` | Render-tested only; ClickHouse docs note it is CLI/local-client functionality and fails via HTTP. |
@@ -145,10 +145,10 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 
 | Status | Feature | Example DSL |
 | --- | --- | --- |
-| ✅ 🧪 | Ranking functions | `over(row_number(), ...)`, `rank().over_window("w")`, `over(dense_rank(), ...)` |
-| ✅ 🧪 | Offset functions | `over(lag(expr), ...)`, `over(lead(expr), ...)`, `over(lag_in_frame(expr, offset, default), ...)`, `lead_in_frame(...)` |
-| ✅ | Value window functions | `over(first_value(expr), ...)`, `over(last_value(expr), ...)` |
-| ✅ 🧪 | Window `over(...)` / named `.over_window(...)` | `over(function, partition_by(...).order_by(...))` |
+| ✅ 🧪 | Ranking functions | `row_number().over_ch(...)`, `rank().over_window("w")`, `dense_rank().over_ch(...)` |
+| ✅ 🧪 | Offset functions | `lag(expr).over_ch(...)`, `lead(expr).over_ch(...)`, `lag_in_frame(expr, offset, default).over_ch(...)`, `lead_in_frame(...)` |
+| ✅ | Value window functions | `first_value(expr).over_ch(...)`, `last_value(expr).over_ch(...)` |
+| ✅ 🧪 | Window `.over_ch(...)` / named `.over_window(...)` | `function.over_ch(partition_by(...).order_by(...))` |
 | ✅ 🧪 | Named `WINDOW` clause | `query.window("w", partition_by(...).order_by(...))` |
 | ✅ 🧪 | Frame variants beyond current row | `.rows_between_preceding_and_following(1, 1)`, `.range_between_preceding_and_current_row(1)`, `.rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2))` |
 
