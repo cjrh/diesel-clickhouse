@@ -85,7 +85,7 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression, so executable ClickHouse joins should use `clickhouse_join(...)`. |
 | ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; raw select expressions currently required. |
-| ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse `[GLOBAL] [ANY|ALL|ASOF] [INNER|LEFT|...] JOIN`. |
+| ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL`, strictness modifiers (`ANY`, `ALL`, `ASOF`), and join kinds. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
 | ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | Diesel table columns in `select` are not yet selectable from custom join sources; use `sql::<...>(...)`. |
 

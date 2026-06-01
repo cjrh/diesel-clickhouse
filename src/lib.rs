@@ -38,6 +38,16 @@
 //! includes an initial HTTP-backed [`ClickHouseConnection`] plus explicit
 //! [`ClickHouseConnectionOptions`] for idiomatic Diesel `load`/`execute`/`batch_execute` workflows. You can still execute rendered SQL through your
 //! ClickHouse client of choice when you need client-specific behavior.
+//!
+//! ## Guides
+//!
+//! Long-form Markdown guides from `./docs/` are rendered under [`docs`] on
+//! docs.rs:
+//!
+//! - [`docs::usage`] for usage guidance.
+//! - [`docs::tutorial`] for the NYC taxi tutorial translated to Diesel.
+//! - [`docs::feature_matrix`] for the implementation checklist.
+//! - [`docs::connection_design`] for connection design notes.
 
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![doc(html_root_url = "https://docs.rs/diesel-clickhouse/0.1.0")]
@@ -48,6 +58,7 @@ mod cast;
 mod clauses;
 mod connection;
 mod ddl;
+pub mod docs;
 mod functions;
 mod grouping;
 mod higher_order;
