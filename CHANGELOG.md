@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.3.0] — 2026-06-01
+
 ### Added
 - Fluent `.over_ch(spec)` helper for ClickHouse window specifications, avoiding ambiguity with Diesel 2.3's no-argument `.over()` method.
 
@@ -32,6 +34,7 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.3.0
 [0.2.1]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.2.1
 [0.2.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.2.0
