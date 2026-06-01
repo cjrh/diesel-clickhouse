@@ -1,6 +1,9 @@
 # diesel-clickhouse
 
-Diesel query-builder extensions for ClickHouse SQL.
+[![Crates.io](https://img.shields.io/crates/v/diesel-clickhouse.svg)](https://crates.io/crates/diesel-clickhouse)
+[![docs.rs](https://docs.rs/diesel-clickhouse/badge.svg)](https://docs.rs/diesel-clickhouse)
+
+[Diesel](https://diesel.rs/) query-builder extensions for [ClickHouse](https://clickhouse.com/) SQL.
 
 This crate provides a lightweight `ClickHouse` backend for rendering Diesel ASTs as ClickHouse SQL, typed helpers for common ClickHouse functions and clauses, and an initial HTTP-backed Diesel `Connection` implementation for idiomatic `load`/`execute` workflows.
 
