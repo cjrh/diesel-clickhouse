@@ -727,15 +727,15 @@ fn renders_window_functions_qualify_and_named_windows() {
 
     let qualify_query = events.select((tenant_id, id)).qualify(
         row_number()
-            .over(partition_by(tenant_id).order_by(id.desc()))
+            .over_ch(partition_by(tenant_id).order_by(id.desc()))
             .eq(1_i64),
     );
     let named_window_query = events
         .select((
             tenant_id,
             rank().over_window("by_tenant"),
-            dense_rank().over(partition_by(tenant_id).order_by(latency_ms.desc())),
-            lag_in_frame(latency_ms, 1_i64, 0.0).over(
+            dense_rank().over_ch(partition_by(tenant_id).order_by(latency_ms.desc())),
+            lag_in_frame(latency_ms, 1_i64, 0.0).over_ch(
                 partition_by(tenant_id)
                     .order_by(id.asc())
                     .rows_between_unbounded_preceding_and_current_row(),
@@ -764,7 +764,7 @@ fn renders_window_frame_variants() {
 
     let rolling_rows = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("sum(`events`.`latency_ms`)").over(
+        diesel::dsl::sql::<diesel::sql_types::Double>("sum(`events`.`latency_ms`)").over_ch(
             partition_by(tenant_id)
                 .order_by(id.asc())
                 .rows_between_preceding_and_following(1, 1),
@@ -772,7 +772,7 @@ fn renders_window_frame_variants() {
     ));
     let trailing_range = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("avg(`events`.`latency_ms`)").over(
+        diesel::dsl::sql::<diesel::sql_types::Double>("avg(`events`.`latency_ms`)").over_ch(
             partition_by(tenant_id)
                 .order_by(latency_ms)
                 .range_between_unbounded_preceding_and_current_row(),
@@ -780,7 +780,7 @@ fn renders_window_frame_variants() {
     ));
     let generic_rows = events.select((
         id,
-        diesel::dsl::sql::<diesel::sql_types::Double>("max(`events`.`latency_ms`)").over(
+        diesel::dsl::sql::<diesel::sql_types::Double>("max(`events`.`latency_ms`)").over_ch(
             partition_by(tenant_id)
                 .order_by(id)
                 .rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2)),

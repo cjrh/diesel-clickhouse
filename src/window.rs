@@ -11,7 +11,7 @@ use diesel::sql_types::{BigInt, SingleValue, SqlType};
 use crate::backend::ClickHouse;
 
 // Window-capable functions. They are ordinary function-call AST nodes until a
-// caller wraps them with [`OverDsl::over`] or [`OverDsl::over_window`].
+// caller wraps them with [`OverDsl::over_ch`] or [`OverDsl::over_window`].
 define_sql_function! {
     /// `row_number()`.
     #[sql_name = "row_number"]
@@ -128,10 +128,13 @@ pub struct OverWindow<Expr> {
     name: String,
 }
 
-/// Fluent `.over(spec)` and `.over_window(name)` helpers for window functions.
+/// Fluent `.over_ch(spec)` and `.over_window(name)` helpers for window functions.
 pub trait OverDsl: Expression + Sized {
     /// Render `self OVER (spec)`.
-    fn over<Spec>(self, spec: Spec) -> Over<Self, Spec> {
+    ///
+    /// The `_ch` suffix avoids a name collision with Diesel 2.3's no-argument
+    /// `.over()` helper while keeping ClickHouse window specifications fluent.
+    fn over_ch<Spec>(self, spec: Spec) -> Over<Self, Spec> {
         Over { expr: self, spec }
     }
 
