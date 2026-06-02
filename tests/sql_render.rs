@@ -13,7 +13,7 @@ use diesel_clickhouse::{
     farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
     greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
     histogram, if_, ilike, ilike_escape, ipv4_num_to_string, ipv4_string_to_num,
-    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, json_exists,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, join_column, json_exists,
     json_extract_int, json_extract_int_ci, json_extract_int_ci_path, json_extract_int_path,
     json_extract_raw_ci, json_extract_raw_path, json_extract_string_ci, json_extract_string_path,
     json_has, json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm,
@@ -82,6 +82,41 @@ diesel::table! {
 
 diesel::joinable!(events -> tenants (tenant_id));
 diesel::allow_tables_to_appear_in_same_query!(events, tenants, tenant_rates, image_vectors);
+
+// `treat_none_as_default_value = false` is required for `#[derive(Insertable)]`
+// on ClickHouse: ClickHouse has no SQL `DEFAULT` keyword for `INSERT`, and the
+// defaultable insert values Diesel emits by default only render on backends
+// that support it (or via a backend-specific impl, which the orphan rule
+// forbids third-party backends from writing).
+#[derive(Insertable)]
+#[diesel(table_name = tenants, treat_none_as_default_value = false)]
+struct NewTenant<'a> {
+    tenant_id: &'a str,
+    plan: &'a str,
+}
+
+#[test]
+fn renders_single_row_insert_from_tuple() {
+    let stmt = diesel::insert_into(tenants::table)
+        .values((tenants::tenant_id.eq("acme"), tenants::plan.eq("pro")));
+    assert_eq!(
+        to_sql(&stmt).unwrap(),
+        "INSERT INTO `tenants` (`tenant_id`, `plan`) VALUES (?, ?)"
+    );
+}
+
+#[test]
+fn renders_single_row_insert_from_insertable_struct() {
+    let row = NewTenant {
+        tenant_id: "beta",
+        plan: "free",
+    };
+    let stmt = diesel::insert_into(tenants::table).values(&row);
+    assert_eq!(
+        to_sql(&stmt).unwrap(),
+        "INSERT INTO `tenants` (`tenant_id`, `plan`) VALUES (?, ?)"
+    );
+}
 
 #[test]
 fn renders_clickhouse_functions_and_trailing_clauses() {
@@ -872,6 +907,36 @@ fn renders_clickhouse_join_extensions() {
         to_sql(&asof_join).unwrap(),
         "SELECT `events`.`id`, `tenant_rates`.`rate` FROM `events` ASOF LEFT JOIN `tenant_rates` ON `events`.`tenant_id` = `tenant_rates`.`tenant_id` AND `events`.`created_at` >= `tenant_rates`.`effective_at`"
     );
+}
+
+#[test]
+fn renders_clickhouse_join_with_typed_columns() {
+    use self::events::dsl::*;
+
+    // `join_column` gives type-safe, table-qualified projection from a custom
+    // ClickHouse join — no hand-written `sql::<...>("...")` select list — and
+    // renders identically to the raw form in `renders_clickhouse_join_extensions`.
+    let any_join = events
+        .clickhouse_join(tenants::table)
+        .any()
+        .inner()
+        .on(tenant_id.eq(tenants::tenant_id))
+        .select((join_column(id), join_column(tenants::plan)));
+    assert_eq!(
+        to_sql(&any_join).unwrap(),
+        "SELECT `events`.`id`, `tenants`.`plan` FROM `events` ANY INNER JOIN `tenants` ON (`events`.`tenant_id` = `tenants`.`tenant_id`)"
+    );
+
+    // The wrapped column keeps its SQL type, so the query's SqlType is the
+    // typed tuple `(BigInt, Text)` rather than the untyped `sql(...)` shape.
+    fn assert_sql_type<Q>(_: &Q)
+    where
+        Q: diesel::query_builder::Query<
+                SqlType = (diesel::sql_types::BigInt, diesel::sql_types::Text),
+            >,
+    {
+    }
+    assert_sql_type(&any_join);
 }
 
 #[test]

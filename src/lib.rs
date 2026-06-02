@@ -146,8 +146,8 @@ pub use higher_order::{
     array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
 };
 pub use joins::{
-    ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinKind, JoinModifier, JoinOn,
-    JoinStrictness, JoinUsing, clickhouse_join,
+    ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind, JoinModifier,
+    JoinOn, JoinStrictness, JoinUsing, clickhouse_join, join_column,
 };
 pub use json::{
     JsonPathFunction, JsonPathSegment, json_extract_bool_path, json_extract_float_path,

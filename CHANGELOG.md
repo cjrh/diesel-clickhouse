@@ -10,6 +10,18 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- `join_column(...)` helper: makes a Diesel table column selectable from a `ClickHouseJoin` source while preserving its SQL type, replacing hand-written `sql::<...>("...")` join projections with type-checked select lists.
+- Idiomatic single-row inserts through `ClickHouseConnection`: `insert_into(t).values((col.eq(v), ...))` and `#[derive(Insertable)]` structs (with `#[diesel(treat_none_as_default_value = false)]`).
+
+### Changed
+- Result loading shares one column-name header (`Arc`) across all rows in a result set instead of cloning a `HashMap` and the column-name strings per row, cutting allocations when loading large results.
+- Backend now reports `DoesNotSupportBatchInsert` (was the incorrect `PostgresLikeBatchInsertSupport`). Multi-row batch inserts are not expressible through Diesel on a third-party backend; use the `clickhouse` client's RowBinary `insert()`/`inserter()` for high-throughput ingestion (documented in `docs/USAGE.md`).
+
+### Documentation
+- Documented that `ClickHouseConnection` is blocking and must be called from a blocking context (not directly from an `async fn`); `diesel-async` is noted as future work.
+- Documented precisely why `execute` returns `0`: ClickHouse reports written rows in `X-ClickHouse-Summary`, but the `clickhouse` client's `execute()` discards that header.
+
 ## [0.3.0] — 2026-06-01
 
 ### Added

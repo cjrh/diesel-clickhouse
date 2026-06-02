@@ -18,7 +18,7 @@ Implemented and live-tested:
 
 Remaining limitations:
 
-- `execute` returns `0` affected rows because ClickHouse HTTP does not provide Diesel-style affected counts for DDL/mutations.
+- `execute` returns `0` affected rows. ClickHouse *does* report written/affected rows in the `X-ClickHouse-Summary` HTTP response header, but the `clickhouse` client's `execute()` returns `()` and discards that header, so the count is not reachable through the current transport. Surfacing a real count would require the upstream client exposing the summary, or a native-protocol transport; bolting on a parallel HTTP request just to read the header would widen the transport boundary this design deliberately keeps narrow.
 - Server-side parameters still use ClickHouse's textual HTTP parameter representation; true binary vector parameters need a richer transport representation.
 - Complex ClickHouse values such as aggregate states and native binary-only representations need expanded `FromSql`/`ToSql` coverage.
 - `batch_execute` uses a small SQL-aware splitter for migration-style batches; it respects semicolons in quoted literals and comments but is not intended to be a full ClickHouse SQL parser.

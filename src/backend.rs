@@ -132,7 +132,14 @@ impl SqlDialect for ClickHouse {
     type OnConflictClause = sql_dialect::on_conflict_clause::DoesNotSupportOnConflictClause;
     type InsertWithDefaultKeyword =
         sql_dialect::default_keyword_for_insert::DoesNotSupportDefaultKeyword;
-    type BatchInsertSupport = sql_dialect::batch_insert_support::PostgresLikeBatchInsertSupport;
+    // Diesel's multi-row `BatchInsert` (`INSERT ... VALUES (..),(..)`) is
+    // hardwired to require `IsoSqlDefaultKeyword`; backends without it (SQLite,
+    // ClickHouse) can only batch through a backend-specific `QueryFragment`
+    // impl, which Rust's orphan rule forbids a third-party backend from writing.
+    // We therefore declare no single-query batch support: single-row inserts go
+    // through Diesel, and high-throughput multi-row ingestion uses the
+    // `clickhouse` client's RowBinary inserter (see `docs/USAGE.md`).
+    type BatchInsertSupport = sql_dialect::batch_insert_support::DoesNotSupportBatchInsert;
     type ConcatClause = sql_dialect::concat_clause::ConcatWithPipesClause;
     type DefaultValueClauseForInsert = sql_dialect::default_value_clause::AnsiDefaultValueClause;
     type EmptyFromClauseSyntax = sql_dialect::from_clause_syntax::AnsiSqlFromClauseSyntax;
