@@ -21,14 +21,13 @@ bigdecimal = ["dep:bigdecimal", "diesel/numeric"]
 # internals and should be validated before widening this range.
 diesel = { version = ">=2.3, <2.4", default-features = false, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes", "with-deprecated"] }
 bigdecimal = { version = ">=0.0.13, <0.5.0", optional = true }
-clickhouse = "=0.13.3"
+clickhouse = "0.15"
 tokio = { version = "1", features = ["rt"] }
 url = "2"
 
 [dev-dependencies]
-# Pinned to known-good releases used by the live ClickHouse integration tests.
-testcontainers = "=0.25.0"
-testcontainers-modules = { version = "=0.13.0", features = ["clickhouse"] }
+testcontainers = "0.27"
+testcontainers-modules = { version = "0.15", features = ["clickhouse"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 trybuild = "1"
 

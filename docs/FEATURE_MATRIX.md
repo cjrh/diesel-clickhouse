@@ -17,7 +17,9 @@ Legend:
 | ✅ | ClickHouse backend marker and query builder | `to_sql(&query)?` | Backtick identifiers, `?` placeholders. |
 | ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Still useful for inspection and external-client execution. |
 | 🧪 | Execute rendered SQL via `clickhouse` crate | `client.query(&to_sql(&query)?).bind(...).fetch_all()` | Live Docker test validates this workflow. |
-| 🚧 🧪 | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Initial HTTP-backed `ClickHouseConnection` supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute`, server-side HTTP parameters for supported binds with escaped-literal fallback for ambiguous cases, primitive/text/nullable rows, `Array<T>` into `Vec<T>`, `Map<K,V>` into `BTreeMap<K,V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant decoding, optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256, and `sql_query`; transactions are explicitly unsupported and richer binary-vector/native-protocol coverage is pending. |
+| 🚧 🧪 | Diesel `Connection` adapter | `query.load::<T>(&mut conn)?` | Initial HTTP-backed `ClickHouseConnection` supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute`, server-side HTTP parameters for supported binds with escaped-literal fallback for ambiguous cases, primitive/text/nullable rows, `Array<T>` into `Vec<T>`, `Map<K,V>` into `BTreeMap<K,V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant decoding, optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256, and `sql_query`; transactions are explicitly unsupported and richer binary-vector/native-protocol coverage is pending. The connection is blocking (owns a current-thread runtime); call it from a blocking context, not directly from an `async fn`. |
+| ✅ 🧪 | Single-row insert | `insert_into(t).values((c.eq(v), ...)).execute(&mut conn)` | Tuple and `#[derive(Insertable)]` (with `#[diesel(treat_none_as_default_value = false)]`) single-row inserts render and execute. |
+| ⬜ | Multi-row batch insert via Diesel | `insert_into(t).values(vec![...])` | Not expressible: Diesel's `BatchInsert` requires the SQL `DEFAULT` keyword, and the escape-hatch `QueryFragment` impl is orphan-rule-reserved for Diesel's own backends. Use the `clickhouse` client's RowBinary `insert()`/`inserter()` for batch ingestion. |
 
 ## ClickHouse SQL types
 
@@ -84,10 +86,11 @@ Legend:
 | Status | Feature | Example DSL | Notes |
 | --- | --- | --- | --- |
 | ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression, so executable ClickHouse joins should use `clickhouse_join(...)`. |
-| ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; raw select expressions currently required. |
+| ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; select columns with `join_column(...)`. |
+| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column so it is selectable from a `ClickHouseJoin` while keeping its SQL type; replaces hand-written `sql::<...>(...)` select lists. Does not check that the column's table appears in the join (orphan rule). |
 | ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL`, strictness modifiers (`ANY`, `ALL`, `ASOF`), and join kinds. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
-| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | Diesel table columns in `select` are not yet selectable from custom join sources; use `sql::<...>(...)`. |
+| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`. |
 
 ## Operators and predicates
 

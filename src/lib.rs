@@ -90,6 +90,7 @@ pub use clauses::{
     into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col, prewhere,
     sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
 };
+pub use clickhouse;
 pub use connection::{
     ClickHouseConnection, ClickHouseConnectionOptions, ClickHouseCursor, ClickHouseField,
     ClickHouseRow, ClickHouseTransactionManager,
@@ -146,8 +147,8 @@ pub use higher_order::{
     array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
 };
 pub use joins::{
-    ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinKind, JoinModifier, JoinOn,
-    JoinStrictness, JoinUsing, clickhouse_join,
+    ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind, JoinModifier,
+    JoinOn, JoinStrictness, JoinUsing, clickhouse_join, join_column,
 };
 pub use json::{
     JsonPathFunction, JsonPathSegment, json_extract_bool_path, json_extract_float_path,

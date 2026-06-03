@@ -29,8 +29,8 @@ use diesel_clickhouse::{
     farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
     greatest, group_by_all, grouping_sets, hex, histogram, ilike, ipv4_num_to_string,
     ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json,
-    json_extract_int, json_extract_int_path, json_extract_string_path, json_has, json_length,
-    json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower,
+    join_column, json_extract_int, json_extract_int_path, json_extract_string_path, json_has,
+    json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower,
     mann_whitney_u_test, map_apply, map_contains, map_filter, max_if, merge_tree, min_if,
     multi_match_any, multi_match_any_index, mutation_assignment, partition_by, partition_expr,
     position, prewhere, projection, quantile, quantile_deterministic, quantile_exact,
@@ -114,6 +114,14 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    #[sql_name = "diesel_clickhouse_connection_inserts"]
+    connection_inserts (id) {
+        id -> BigInt,
+        tenant_id -> Text,
+    }
+}
+
 diesel::joinable!(events -> tenants (tenant_id));
 diesel::allow_tables_to_appear_in_same_query!(
     events,
@@ -123,6 +131,15 @@ diesel::allow_tables_to_appear_in_same_query!(
     mv_source,
     image_vectors
 );
+
+// Single-row inserts through Diesel require `treat_none_as_default_value =
+// false` on ClickHouse (no SQL `DEFAULT` keyword for `INSERT`).
+#[derive(Insertable)]
+#[diesel(table_name = connection_inserts, treat_none_as_default_value = false)]
+struct NewConnectionInsert<'a> {
+    id: i64,
+    tenant_id: &'a str,
+}
 
 struct ClickHouseFixture {
     _node: ContainerAsync<ClickHouseImage>,
@@ -140,10 +157,19 @@ async fn start_clickhouse() -> TestResult<ClickHouseFixture> {
     let host = node.get_host().await?;
     let port = node.get_host_port_ipv4(CLICKHOUSE_PORT).await?;
     let url = format!("http://{host}:{port}");
+    // These tests drive the raw `clickhouse` client to confirm that SQL rendered
+    // by this crate *executes and returns the expected values*, not that the
+    // assertion tuples' Rust types exactly match the ClickHouse column types.
+    // clickhouse 0.14+ defaults to `RowBinaryWithNamesAndTypes`, which strictly
+    // rejects benign reads like `UInt64` into `i64` or `UInt8` into `bool`.
+    // Disabling validation uses positional `RowBinary` and keeps these
+    // value-focused assertions lenient. (The `ClickHouseConnection` path is
+    // unaffected: it decodes text via `fetch_bytes`, not this serde path.)
     let client = clickhouse::Client::default()
         .with_url(&url)
         .with_user("default")
-        .with_password("password");
+        .with_password("password")
+        .with_validation(false);
     Ok(ClickHouseFixture {
         _node: node,
         url,
@@ -556,6 +582,62 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         );
         diesel::sql_query("DROP TABLE diesel_clickhouse_connection_spike").execute(&mut conn)?;
 
+        // Idiomatic Diesel single-row inserts through the connection: both the
+        // explicit-tuple form and a `#[derive(Insertable)]` struct.
+        diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_inserts")
+            .execute(&mut conn)?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_connection_inserts (id Int64, tenant_id String) \
+             ENGINE = Memory",
+        )
+        .execute(&mut conn)?;
+
+        diesel::insert_into(connection_inserts::table)
+            .values((
+                connection_inserts::id.eq(1_i64),
+                connection_inserts::tenant_id.eq("acme"),
+            ))
+            .execute(&mut conn)?;
+        diesel::insert_into(connection_inserts::table)
+            .values(&NewConnectionInsert {
+                id: 2,
+                tenant_id: "beta",
+            })
+            .execute(&mut conn)?;
+
+        let inserted_rows: Vec<(i64, String)> = connection_inserts::table
+            .select((connection_inserts::id, connection_inserts::tenant_id))
+            .order(connection_inserts::id.asc())
+            .load(&mut conn)?;
+        assert_eq!(
+            inserted_rows,
+            vec![(1, "acme".to_string()), (2, "beta".to_string())]
+        );
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_inserts").execute(&mut conn)?;
+
+        // Type-safe column selection from a ClickHouse join via `join_column`,
+        // loaded through the Diesel connection into a typed `(i64, String)` tuple
+        // (no hand-written `sql::<...>("...")` projection).
+        let typed_join_rows: Vec<(i64, String)> = events
+            .clickhouse_join(tenants::table)
+            .all()
+            .inner()
+            .on(tenant_id.eq(tenants::tenant_id))
+            .select((join_column(id), join_column(tenants::plan)))
+            .order(join_column(id).asc())
+            .load(&mut conn)?;
+        assert_eq!(
+            typed_join_rows,
+            vec![
+                (1, "enterprise".to_string()),
+                (2, "enterprise".to_string()),
+                (3, "enterprise".to_string()),
+                (4, "starter".to_string()),
+                (5, "starter".to_string()),
+                (6, "starter".to_string()),
+            ]
+        );
+
         conn.batch_execute(
             r#"
             DROP TABLE IF EXISTS diesel_clickhouse_connection_batch;
@@ -660,8 +742,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     fixture
         .client
         .query(&to_sql(&type_showcase_ddl)?)
-        .with_option("allow_experimental_dynamic_type", "1")
-        .with_option("allow_experimental_variant_type", "1")
+        .with_setting("allow_experimental_dynamic_type", "1")
+        .with_setting("allow_experimental_variant_type", "1")
         .execute()
         .await?;
     let type_showcase_exists: u64 = fixture

@@ -18,7 +18,7 @@ Implemented and live-tested:
 
 Remaining limitations:
 
-- `execute` returns `0` affected rows because ClickHouse HTTP does not provide Diesel-style affected counts for DDL/mutations.
+- `execute` returns `0` affected rows. ClickHouse *does* report written/affected rows in the `X-ClickHouse-Summary` HTTP response header, but the `clickhouse` client's `execute()` returns `()` and discards that header, so the count is not reachable through the current transport. Surfacing a real count would require the upstream client exposing the summary, or a native-protocol transport; bolting on a parallel HTTP request just to read the header would widen the transport boundary this design deliberately keeps narrow.
 - Server-side parameters still use ClickHouse's textual HTTP parameter representation; true binary vector parameters need a richer transport representation.
 - Complex ClickHouse values such as aggregate states and native binary-only representations need expanded `FromSql`/`ToSql` coverage.
 - `batch_execute` uses a small SQL-aware splitter for migration-style batches; it respects semicolons in quoted literals and comments but is not intended to be a full ClickHouse SQL parser.
@@ -81,9 +81,18 @@ Open questions:
 
 ## Loading rows
 
-Diesel's `Queryable`/`FromSql` path needs ClickHouse `RawValue` values that line up with Diesel SQL types. The current connection decodes `TabSeparatedWithNamesAndTypes` into owned row fields, which is simple and debuggable but not the final word for every ClickHouse type. Richer `FromSql` implementations may later be backed by RowBinary or native protocol values.
+Diesel's `Queryable`/`FromSql` path needs ClickHouse `RawValue` values that line up with Diesel SQL types. The connection decodes `TabSeparatedWithNamesAndTypes` into owned row fields, which is simple, universal, and debuggable: every ClickHouse type — including the awkward ones — has a human-readable text form, so a single text parser plus the text-oriented `FromSql` impls cover the whole type surface.
 
-Priority row types:
+### Why not RowBinary (yet)
+
+A `RowBinaryWithNamesAndTypes` transport would avoid text parsing and is the obvious perf lever. It was evaluated and **deliberately deferred**. The findings, so a future implementer does not re-derive them:
+
+- The header is `varint(n_columns)`, then `n` length-prefixed column names, then `n` length-prefixed **type strings** — so each column's type is known before decoding rows. Header parsing is easy.
+- Most types are straightforward binary, and two feared cases are trivial: `RowBinary` writes `LowCardinality(T)` as plain `T` (no dictionary), and `Nullable(T)` as a single `0/1` flag byte followed by the value only when non-null.
+- The blocker is the **modern/semi-structured types**: `Dynamic` prefixes each value with an embedded binary-encoded type spec; `Variant` uses a discriminator; `JSON` and `AggregateFunction` states are worse and version-specific. The load path serves these today (via `sql_query`/`QueryableByName`), and a response is a single format chosen at request time — you cannot mix binary for scalars and text for the hard types within one query. So a binary transport must either hand-implement every exotic decoder (real silent-corruption risk, pinned to a server version) or regress types that currently work.
+- Conclusion: keep text as the universal default. If RowBinary is revisited, the sound shape is **binary for the supported types with a transparent text fallback** when the result header contains an unsupported type — a feature/opt-in, not a replacement of the text path.
+
+Priority row types (for any future richer transport):
 
 1. Primitive numeric, bool, text, binary.
 2. Date/time and UUID.

@@ -9,7 +9,10 @@
 //! source, so selecting from these joins currently uses explicit SQL select
 //! expressions.
 
-use diesel::expression::{Expression, SqlLiteral, expression_types::Untyped};
+use diesel::expression::{
+    AppearsOnTable, Expression, SelectableExpression, SqlLiteral, ValidGrouping,
+    expression_types::Untyped, is_aggregate,
+};
 use diesel::query_builder::{AsQuery, AstPass, Query, QueryFragment, QueryId};
 use diesel::query_dsl::{QueryDsl, RunQueryDsl, methods::SelectDsl};
 use diesel::query_source::{AppearsInFromClause, Plus, QuerySource};
@@ -421,6 +424,80 @@ impl JoinModifier {
             Self::Semi => " SEMI",
             Self::Anti => " ANTI",
         }
+    }
+}
+
+/// A Diesel table column made selectable from a [`ClickHouseJoin`] source.
+///
+/// Diesel's `table!` macro only implements `SelectableExpression` for a column
+/// against Diesel's own built-in join nodes, so a bare `events::id` cannot be
+/// passed to `.select(...)` on a [`ClickHouseJoin`]. Wrapping it with
+/// [`join_column`] keeps the column's SQL type — so the Rust type the query
+/// loads is still checked — and renders the same `` `table`.`column` `` SQL,
+/// while satisfying the selection bound for the custom join source. This
+/// replaces the previous `sql::<(BigInt, Text)>("`events`.`id`, ...")` escape
+/// hatch, which threw away both the column names and their SQL types.
+///
+/// The wrapper deliberately does **not** verify that the column's table appears
+/// in the join. That from-clause check is exactly what Diesel's built-in joins
+/// provide and what Rust's orphan rule prevents a third-party backend from
+/// reproducing for arbitrary foreign columns. The `ON`/`USING` constraint and
+/// any `filter`/`order` predicates still use real, type-checked columns; only
+/// the projection trades the appearance check for type-correct loading.
+#[derive(Debug, Clone, Copy)]
+pub struct JoinColumn<C>(C);
+
+/// Wrap a Diesel column so it can be selected from a [`ClickHouseJoin`].
+///
+/// ```ignore
+/// events::table
+///     .clickhouse_join(tenants::table)
+///     .any()
+///     .inner()
+///     .on(events::tenant_id.eq(tenants::tenant_id))
+///     .select((join_column(events::id), join_column(tenants::plan)))
+///     .load::<(i64, String)>(&mut conn)?;
+/// ```
+pub fn join_column<C>(column: C) -> JoinColumn<C>
+where
+    C: Expression,
+{
+    JoinColumn(column)
+}
+
+impl<C> Expression for JoinColumn<C>
+where
+    C: Expression,
+{
+    type SqlType = C::SqlType;
+}
+
+// Selectable / appears-on-table for *any* query source: the wrapper opts out of
+// the from-clause appearance check (see the type's docs), so these are blanket
+// impls keyed only on the local `JoinColumn` type.
+impl<C, QS> AppearsOnTable<QS> for JoinColumn<C> where C: Expression {}
+
+impl<C, QS> SelectableExpression<QS> for JoinColumn<C> where C: Expression {}
+
+// `Never` marks the projection as valid in both grouped and non-grouped
+// queries, matching the wrapper's "trust the caller" stance.
+impl<C, GroupBy> ValidGrouping<GroupBy> for JoinColumn<C> {
+    type IsAggregate = is_aggregate::Never;
+}
+
+impl<C> QueryId for JoinColumn<C> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<C> QueryFragment<ClickHouse> for JoinColumn<C>
+where
+    C: QueryFragment<ClickHouse>,
+{
+    fn walk_ast<'b>(&'b self, out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        // A Diesel column already renders fully table-qualified
+        // (`` `table`.`column` ``), which is exactly what a join projection needs.
+        self.0.walk_ast(out)
     }
 }
 

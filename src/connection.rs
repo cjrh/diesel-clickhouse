@@ -10,6 +10,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::error::Error as StdError;
 use std::fmt;
 use std::ops::Range;
+use std::sync::Arc;
 
 use diesel::connection::{
     CacheSize, Connection, ConnectionSealed, DefaultLoadingMode, Instrumentation,
@@ -33,6 +34,31 @@ use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata}
 /// ClickHouse-specific semantics explicit: transactions are unsupported and
 /// command execution reports `0` affected rows because ClickHouse's HTTP
 /// interface does not provide OLTP-style row counts for DDL/mutations.
+///
+/// # Blocking I/O and async runtimes
+///
+/// Like Diesel's other connections, this is a **blocking** connection. It owns
+/// a current-thread Tokio runtime and drives the async `clickhouse` client with
+/// `block_on`. Tokio forbids both `block_on` and runtime `Drop` from inside an
+/// active async task, so you must **not** call `load`/`execute`/`batch_execute`
+/// — or drop the connection — directly from an `async fn` running on the Tokio
+/// executor. Doing so panics with "Cannot start a runtime from within a
+/// runtime". (This is not specific to ClickHouse; Diesel's `PgConnection` and
+/// friends are blocking too.)
+///
+/// Use the connection from a blocking context: ordinary synchronous code, a
+/// dedicated thread, a blocking connection pool such as `r2d2`, or
+/// [`tokio::task::spawn_blocking`]:
+///
+/// ```ignore
+/// let rows = tokio::task::spawn_blocking(move || {
+///     events::table.select(events::id).load::<i64>(&mut conn)
+/// })
+/// .await??;
+/// ```
+///
+/// A native `diesel-async` `AsyncConnection` is the idiomatic path for async
+/// callers and is a candidate for future work.
 #[allow(missing_debug_implementations)]
 pub struct ClickHouseConnection {
     client: clickhouse::Client,
@@ -144,7 +170,7 @@ impl ClickHouseConnectionOptions {
             client = client.with_database(database);
         }
         for (name, value) in self.options {
-            client = client.with_option(name, value);
+            client = client.with_setting(name, value);
         }
 
         let mut conn = ClickHouseConnection::with_client(client)?;
@@ -202,7 +228,7 @@ impl ClickHouseConnection {
         let client_sql = escape_clickhouse_client_template(&prepared.sql);
         let mut http_query = self.client.query(&client_sql);
         for (name, value) in prepared.params {
-            http_query = http_query.with_option(name, value);
+            http_query = http_query.with_setting(name, value);
         }
         let result = self
             .runtime
@@ -226,7 +252,7 @@ impl ClickHouseConnection {
         let result = self.runtime.block_on(async {
             let mut http_query = self.client.query(&client_sql);
             for (name, value) in prepared.params {
-                http_query = http_query.with_option(name, value);
+                http_query = http_query.with_setting(name, value);
             }
             let mut cursor = http_query
                 .fetch_bytes("TabSeparatedWithNamesAndTypes")
@@ -283,6 +309,14 @@ impl Connection for ClickHouseConnection {
     {
         let prepared = self.render_query(source)?;
         self.execute_prepared(prepared)?;
+        // ClickHouse reports affected/written row counts in the
+        // `X-ClickHouse-Summary` HTTP response header, but the `clickhouse`
+        // client's `execute()` returns `()` and discards that header, so no
+        // count is available through the current transport. We return `0`
+        // rather than guess. Surfacing a real count would require either the
+        // upstream client exposing the summary or a native-protocol transport;
+        // callers needing insert acknowledgement should rely on a subsequent
+        // query. See `docs/CONNECTION_DESIGN.md`.
         Ok(0)
     }
 
@@ -366,36 +400,46 @@ impl TransactionManager<ClickHouseConnection> for ClickHouseTransactionManager {
 /// Iterator returned by [`ClickHouseConnection`] load operations.
 pub type ClickHouseCursor = std::vec::IntoIter<QueryResult<ClickHouseRow>>;
 
+/// Column names and name→index lookup shared by every row in one result set.
+///
+/// A ClickHouse result repeats the same column names for every row, so the
+/// header is computed once during parsing and shared (`Arc`) across all rows
+/// instead of being cloned per row. This keeps loading a large result set from
+/// allocating one `HashMap` and N column-name `String`s per row.
+#[derive(Debug)]
+struct RowHeader {
+    names: Vec<String>,
+    by_name: HashMap<String, usize>,
+}
+
 /// Owned result row used by the ClickHouse connection.
+///
+/// Holds only this row's field values; column names live in the shared
+/// [`RowHeader`].
 #[derive(Debug, Clone)]
 pub struct ClickHouseRow {
-    fields: Vec<ClickHouseFieldValue>,
-    fields_by_name: HashMap<String, usize>,
+    header: Arc<RowHeader>,
+    values: Vec<Option<Vec<u8>>>,
 }
 
 /// Field view returned from [`ClickHouseRow`].
 #[derive(Debug, Clone, Copy)]
 pub struct ClickHouseField<'a> {
-    inner: &'a ClickHouseFieldValue,
-}
-
-#[derive(Debug, Clone)]
-struct ClickHouseFieldValue {
-    name: String,
-    value: Option<Vec<u8>>,
+    name: &'a str,
+    value: Option<&'a [u8]>,
 }
 
 impl RowSealed for ClickHouseRow {}
 
 impl RowIndex<usize> for ClickHouseRow {
     fn idx(&self, idx: usize) -> Option<usize> {
-        (idx < self.fields.len()).then_some(idx)
+        (idx < self.values.len()).then_some(idx)
     }
 }
 
 impl RowIndex<&str> for ClickHouseRow {
     fn idx(&self, idx: &str) -> Option<usize> {
-        self.fields_by_name.get(idx).copied()
+        self.header.by_name.get(idx).copied()
     }
 }
 
@@ -409,7 +453,7 @@ impl<'a> Row<'a, ClickHouse> for ClickHouseRow {
     type InnerPartialRow = Self;
 
     fn field_count(&self) -> usize {
-        self.fields.len()
+        self.values.len()
     }
 
     fn get<'b, I>(&'b self, idx: I) -> Option<Self::Field<'b>>
@@ -418,7 +462,12 @@ impl<'a> Row<'a, ClickHouse> for ClickHouseRow {
         Self: RowIndex<I>,
     {
         let idx = self.idx(idx)?;
-        self.fields.get(idx).map(|inner| ClickHouseField { inner })
+        let name = self.header.names.get(idx)?;
+        let value = self.values.get(idx)?;
+        Some(ClickHouseField {
+            name,
+            value: value.as_deref(),
+        })
     }
 
     fn partial_row(&self, range: Range<usize>) -> PartialRow<'_, Self::InnerPartialRow> {
@@ -428,11 +477,11 @@ impl<'a> Row<'a, ClickHouse> for ClickHouseRow {
 
 impl<'a> Field<'a, ClickHouse> for ClickHouseField<'a> {
     fn field_name(&self) -> Option<&str> {
-        Some(&self.inner.name)
+        Some(self.name)
     }
 
     fn value(&self) -> Option<<ClickHouse as diesel::backend::Backend>::RawValue<'_>> {
-        self.inner.value.as_deref()
+        self.value
     }
 }
 
@@ -950,6 +999,13 @@ fn parse_rows(bytes: &[u8]) -> QueryResult<Vec<ClickHouseRow>> {
         })
         .collect::<QueryResult<Vec<_>>>()?;
 
+    let by_name = names
+        .iter()
+        .enumerate()
+        .map(|(idx, name)| (name.clone(), idx))
+        .collect();
+    let header = Arc::new(RowHeader { names, by_name });
+
     let mut rows = Vec::new();
     for line in lines {
         if line.is_empty() {
@@ -959,31 +1015,20 @@ fn parse_rows(bytes: &[u8]) -> QueryResult<Vec<ClickHouseRow>> {
             .into_iter()
             .map(decode_tsv_field)
             .collect::<QueryResult<Vec<_>>>()?;
-        if values.len() != names.len() {
+        if values.len() != header.names.len() {
             return Err(Error::DeserializationError(
                 format!(
                     "ClickHouse row had {} fields but header declared {}",
                     values.len(),
-                    names.len()
+                    header.names.len()
                 )
                 .into(),
             ));
         }
 
-        let fields = names
-            .iter()
-            .cloned()
-            .zip(values)
-            .map(|(name, value)| ClickHouseFieldValue { name, value })
-            .collect::<Vec<_>>();
-        let fields_by_name = fields
-            .iter()
-            .enumerate()
-            .map(|(idx, field)| (field.name.clone(), idx))
-            .collect();
         rows.push(ClickHouseRow {
-            fields,
-            fields_by_name,
+            header: Arc::clone(&header),
+            values,
         });
     }
 
