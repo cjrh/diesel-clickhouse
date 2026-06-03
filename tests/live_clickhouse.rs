@@ -13,13 +13,17 @@
 use std::error::Error;
 
 use diesel::prelude::*;
+// Bring diesel-async's `RunQueryDsl` into scope explicitly. An explicit import
+// shadows the `RunQueryDsl` pulled in by diesel's prelude glob, so `.load`/
+// `.execute`/... resolve unambiguously to the async connection's methods.
+use diesel_async::RunQueryDsl;
 use testcontainers_modules::{
     clickhouse::{CLICKHOUSE_PORT, ClickHouse as ClickHouseImage},
     testcontainers::{ContainerAsync, ImageExt, runners::AsyncRunner},
 };
 
 use diesel_clickhouse::{
-    ClickHouseConnection, ClickHouseConnectionOptions, ClickHouseJoinDsl, ClickHouseQueryDsl,
+    AsyncClickHouseConnection, ClickHouseConnectionOptions, ClickHouseJoinDsl, ClickHouseQueryDsl,
     ClickHouseTextExpressionMethods, Column, DataType, NestedField, OverDsl, Setting, TableEngine,
     TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table,
     analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter, array_map,
@@ -179,7 +183,7 @@ async fn start_clickhouse() -> TestResult<ClickHouseFixture> {
     // clickhouse 0.14+ defaults to `RowBinaryWithNamesAndTypes`, which strictly
     // rejects benign reads like `UInt64` into `i64` or `UInt8` into `bool`.
     // Disabling validation uses positional `RowBinary` and keeps these
-    // value-focused assertions lenient. (The `ClickHouseConnection` path is
+    // value-focused assertions lenient. (The `AsyncClickHouseConnection` path is
     // unaffected: it decodes text via `fetch_bytes`, not this serde path.)
     let client = clickhouse::Client::default()
         .with_url(&url)
@@ -300,11 +304,10 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     let diesel_url = fixture
         .url
         .replacen("http://", "http://default:password@", 1);
-    tokio::task::spawn_blocking(move || -> TestResult<()> {
+    {
         use std::collections::BTreeMap;
 
-        use diesel::connection::SimpleConnection;
-        use diesel::Connection;
+        use diesel_async::{AsyncConnection, SimpleAsyncConnection};
 
         #[derive(Debug, PartialEq, QueryableByName)]
         struct ConnectionRow {
@@ -352,35 +355,36 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             row_variant: String,
         }
 
-        let mut conn = ClickHouseConnection::establish(&diesel_url)?;
+        let mut conn = AsyncClickHouseConnection::establish(&diesel_url).await?;
         let mut options_conn = ClickHouseConnectionOptions::from_url(&diesel_url)?
             .option("max_threads", "1")
-            .connect()?;
-        let options_value: i32 = diesel::select(diesel::dsl::sql::<diesel::sql_types::Integer>(
-            "toInt32(1)",
-        ))
-        .get_result(&mut options_conn)?;
+            .connect()
+            .await?;
+        let options_value: i32 =
+            diesel::select(diesel::dsl::sql::<diesel::sql_types::Integer>("toInt32(1)"))
+                .get_result(&mut options_conn)
+                .await?;
         assert_eq!(options_value, 1);
         let rows: Vec<(String, i64)> = events
             .filter(tenant_id.eq("acme").and(success.eq(true)))
             .group_by(tenant_id)
             .select((tenant_id, diesel::dsl::count_star()))
-            .load(&mut conn)?;
+            .load(&mut conn)
+            .await?;
         assert_eq!(rows, vec![("acme".to_string(), 2)]);
 
         let tag_values: Vec<String> = events
             .filter(id.eq(1_i64))
             .select(tags)
-            .first(&mut conn)?;
-        assert_eq!(
-            tag_values,
-            vec!["paid".to_string(), "mobile".to_string()]
-        );
+            .first(&mut conn)
+            .await?;
+        assert_eq!(tag_values, vec!["paid".to_string(), "mobile".to_string()]);
 
         let attrs_map: BTreeMap<String, String> = events
             .filter(id.eq(1_i64))
             .select(attrs)
-            .first(&mut conn)?;
+            .first(&mut conn)
+            .await?;
         assert_eq!(
             attrs_map,
             BTreeMap::from([
@@ -392,13 +396,14 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         let created_at_value: String = events
             .filter(id.eq(1_i64))
             .select(created_at)
-            .first(&mut conn)?;
+            .first(&mut conn)
+            .await?;
         assert_eq!(created_at_value, "2024-01-01 00:10:00");
 
         let network_row = diesel::sql_query(
             "SELECT toUUID('550e8400-e29b-41d4-a716-446655440000') AS uuid_value, toIPv4('192.0.2.1') AS ipv4_value, toIPv6('2001:db8::1') AS ipv6_value",
         )
-        .get_result::<ConnectionNetworkRow>(&mut conn)?;
+        .get_result::<ConnectionNetworkRow>(&mut conn).await?;
         assert_eq!(
             network_row,
             ConnectionNetworkRow {
@@ -409,18 +414,27 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         );
 
         let tuple_value: (String, i64) = diesel::select(diesel::dsl::sql::<
-            diesel_clickhouse::sql_types::Tuple<(diesel::sql_types::Text, diesel::sql_types::BigInt)>,
+            diesel_clickhouse::sql_types::Tuple<(
+                diesel::sql_types::Text,
+                diesel::sql_types::BigInt,
+            )>,
         >("tuple('north', toInt64(7))"))
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(tuple_value, ("north".to_string(), 7));
 
         let tuple_array: Vec<(String, i64)> = diesel::select(diesel::dsl::sql::<
-            diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::Tuple<(
-                diesel::sql_types::Text,
-                diesel::sql_types::BigInt,
-            )>>,
-        >("[('north', toInt64(7)), ('south', toInt64(9))]"))
-        .get_result(&mut conn)?;
+            diesel_clickhouse::sql_types::Array<
+                diesel_clickhouse::sql_types::Tuple<(
+                    diesel::sql_types::Text,
+                    diesel::sql_types::BigInt,
+                )>,
+            >,
+        >(
+            "[('north', toInt64(7)), ('south', toInt64(9))]",
+        ))
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(
             tuple_array,
             vec![("north".to_string(), 7), ("south".to_string(), 9)]
@@ -429,7 +443,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         let decimal_value: String = diesel::select(diesel::dsl::sql::<
             diesel_clickhouse::sql_types::Decimal64<2>,
         >("toDecimal64(123.45, 2)"))
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(decimal_value, "123.45");
 
         #[cfg(feature = "bigdecimal")]
@@ -438,30 +453,31 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
 
             use bigdecimal::BigDecimal;
 
-            let numeric_decimal: BigDecimal = diesel::select(diesel::dsl::sql::<
-                diesel::sql_types::Numeric,
-            >("toDecimal128('1234567890.123456', 6)"))
-            .get_result(&mut conn)?;
-            assert_eq!(
-                numeric_decimal,
-                BigDecimal::from_str("1234567890.123456")?
-            );
+            let numeric_decimal: BigDecimal =
+                diesel::select(diesel::dsl::sql::<diesel::sql_types::Numeric>(
+                    "toDecimal128('1234567890.123456', 6)",
+                ))
+                .get_result(&mut conn)
+                .await?;
+            assert_eq!(numeric_decimal, BigDecimal::from_str("1234567890.123456")?);
 
-            let decimal_family: (BigDecimal, BigDecimal, BigDecimal, BigDecimal) = diesel::select((
-                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal32<2>>(
-                    "toDecimal32('12.34', 2)",
-                ),
-                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal64<4>>(
-                    "toDecimal64('-56.7890', 4)",
-                ),
-                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal128<8>>(
-                    "toDecimal128('123456789.12345678', 8)",
-                ),
-                diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal256<12>>(
-                    "toDecimal256('12345678901234567890.123456789012', 12)",
-                ),
-            ))
-            .get_result(&mut conn)?;
+            let decimal_family: (BigDecimal, BigDecimal, BigDecimal, BigDecimal) =
+                diesel::select((
+                    diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal32<2>>(
+                        "toDecimal32('12.34', 2)",
+                    ),
+                    diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal64<4>>(
+                        "toDecimal64('-56.7890', 4)",
+                    ),
+                    diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal128<8>>(
+                        "toDecimal128('123456789.12345678', 8)",
+                    ),
+                    diesel::dsl::sql::<diesel_clickhouse::sql_types::Decimal256<12>>(
+                        "toDecimal256('12345678901234567890.123456789012', 12)",
+                    ),
+                ))
+                .get_result(&mut conn)
+                .await?;
             assert_eq!(
                 decimal_family,
                 (
@@ -483,7 +499,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 .bind::<diesel_clickhouse::sql_types::Decimal64<2>, _>(BigDecimal::from_str(
                     "987.65",
                 )?)
-                .get_result::<BigDecimalBindRow>(&mut conn)?;
+                .get_result::<BigDecimalBindRow>(&mut conn)
+                .await?;
             assert_eq!(
                 bound_decimal,
                 BigDecimalBindRow {
@@ -495,7 +512,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         let maybe_value: Option<String> = diesel::select(diesel::dsl::sql::<
             diesel::sql_types::Nullable<diesel::sql_types::Text>,
         >("NULL"))
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(maybe_value, None);
 
         let nullable_scalars: (Option<i32>, Option<bool>, Option<String>) = diesel::select((
@@ -509,7 +527,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 "toNullable('semi;colon?')",
             ),
         ))
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(
             nullable_scalars,
             (Some(42), None, Some("semi;colon?".to_string()))
@@ -518,15 +537,11 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         let nullable_composites = diesel::sql_query(
             "SELECT [toNullable('paid'), NULL, toNullable('mobile')] AS nullable_tags, map('present', toNullable(toInt32(7)), 'missing', CAST(NULL, 'Nullable(Int32)')) AS nullable_attrs, tuple('north', CAST(NULL, 'Nullable(Int64)')) AS nullable_tuple",
         )
-        .get_result::<ConnectionNullableCompositeRow>(&mut conn)?;
+        .get_result::<ConnectionNullableCompositeRow>(&mut conn).await?;
         assert_eq!(
             nullable_composites,
             ConnectionNullableCompositeRow {
-                row_nullable_tags: vec![
-                    Some("paid".to_string()),
-                    None,
-                    Some("mobile".to_string()),
-                ],
+                row_nullable_tags: vec![Some("paid".to_string()), None, Some("mobile".to_string()),],
                 row_nullable_attrs: BTreeMap::from([
                     ("missing".to_string(), None),
                     ("present".to_string(), Some(7)),
@@ -538,7 +553,7 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         let semi_structured = diesel::sql_query(
             "SELECT CAST(toUInt64(42), 'Dynamic') AS dynamic_value, CAST(toUInt64(42), 'Variant(UInt64, String)') AS variant_value SETTINGS allow_experimental_dynamic_type = 1, allow_experimental_variant_type = 1",
         )
-        .get_result::<ConnectionSemiStructuredRow>(&mut conn)?;
+        .get_result::<ConnectionSemiStructuredRow>(&mut conn).await?;
         assert_eq!(
             semi_structured,
             ConnectionSemiStructuredRow {
@@ -551,38 +566,43 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .filter(tenant_id.eq("acme"))
             .select(diesel::dsl::sql::<diesel::sql_types::Text>("'literal ?'"))
             .order(id.asc())
-            .load(&mut conn)?;
+            .load(&mut conn)
+            .await?;
         assert_eq!(literal_question_rows, vec!["literal ?".to_string(); 3]);
 
         let server_parameter_text: String = diesel::select(
-            diesel::dsl::sql::<diesel::sql_types::Text>("").bind::<diesel::sql_types::Text, _>(
-                "quote ' and question ? stay data",
-            ),
+            diesel::dsl::sql::<diesel::sql_types::Text>("")
+                .bind::<diesel::sql_types::Text, _>("quote ' and question ? stay data"),
         )
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(server_parameter_text, "quote ' and question ? stay data");
 
         let server_parameter_null: Option<i32> = diesel::select(
             diesel::dsl::sql::<diesel::sql_types::Nullable<diesel::sql_types::Integer>>("")
                 .bind::<diesel::sql_types::Nullable<diesel::sql_types::Integer>, _>(None::<i32>),
         )
-        .get_result(&mut conn)?;
+        .get_result(&mut conn)
+        .await?;
         assert_eq!(server_parameter_null, None);
 
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_spike")
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .await?;
         diesel::sql_query(
             "CREATE TABLE diesel_clickhouse_connection_spike (id Int64, tenant_id String) ENGINE = Memory",
         )
-        .execute(&mut conn)?;
+        .execute(&mut conn).await?;
         diesel::sql_query(
             "INSERT INTO diesel_clickhouse_connection_spike VALUES (1, 'acme'), (2, 'beta')",
         )
-        .execute(&mut conn)?;
+        .execute(&mut conn)
+        .await?;
         let sql_rows = diesel::sql_query(
             "SELECT id, tenant_id FROM diesel_clickhouse_connection_spike ORDER BY id",
         )
-        .load::<ConnectionRow>(&mut conn)?;
+        .load::<ConnectionRow>(&mut conn)
+        .await?;
         assert_eq!(
             sql_rows,
             vec![
@@ -596,17 +616,21 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 },
             ]
         );
-        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_spike").execute(&mut conn)?;
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_spike")
+            .execute(&mut conn)
+            .await?;
 
         // Idiomatic Diesel single-row inserts through the connection: both the
         // explicit-tuple form and a `#[derive(Insertable)]` struct.
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_inserts")
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .await?;
         diesel::sql_query(
             "CREATE TABLE diesel_clickhouse_connection_inserts (id Int64, tenant_id String) \
              ENGINE = Memory",
         )
-        .execute(&mut conn)?;
+        .execute(&mut conn)
+        .await?;
 
         // `execute` now surfaces the written-row count ClickHouse reports in its
         // `X-ClickHouse-Summary` trailer, so a single-row insert returns 1.
@@ -615,35 +639,42 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 connection_inserts::id.eq(1_i64),
                 connection_inserts::tenant_id.eq("acme"),
             ))
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .await?;
         assert_eq!(tuple_insert_count, 1);
         let struct_insert_count = diesel::insert_into(connection_inserts::table)
             .values(&NewConnectionInsert {
                 id: 2,
                 tenant_id: "beta",
             })
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .await?;
         assert_eq!(struct_insert_count, 1);
 
         let inserted_rows: Vec<(i64, String)> = connection_inserts::table
             .select((connection_inserts::id, connection_inserts::tenant_id))
             .order(connection_inserts::id.asc())
-            .load(&mut conn)?;
+            .load(&mut conn)
+            .await?;
         assert_eq!(
             inserted_rows,
             vec![(1, "acme".to_string()), (2, "beta".to_string())]
         );
-        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_inserts").execute(&mut conn)?;
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_inserts")
+            .execute(&mut conn)
+            .await?;
 
         // Multi-row ingestion via `insert_batch`: one columnar RowBinary request
         // for the whole batch, returning the number of rows sent.
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_batch")
-            .execute(&mut conn)?;
+            .execute(&mut conn)
+            .await?;
         diesel::sql_query(
             "CREATE TABLE diesel_clickhouse_connection_batch (id Int64, tenant_id String) \
              ENGINE = Memory",
         )
-        .execute(&mut conn)?;
+        .execute(&mut conn)
+        .await?;
 
         let batch = vec![
             BatchRow {
@@ -659,13 +690,16 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 tenant_id: "gamma".to_string(),
             },
         ];
-        let batch_count = conn.insert_batch("diesel_clickhouse_connection_batch", batch)?;
+        let batch_count = conn
+            .insert_batch("diesel_clickhouse_connection_batch", batch)
+            .await?;
         assert_eq!(batch_count, 3);
 
         let batch_rows: Vec<(i64, String)> = connection_batch::table
             .select((connection_batch::id, connection_batch::tenant_id))
             .order(connection_batch::id.asc())
-            .load(&mut conn)?;
+            .load(&mut conn)
+            .await?;
         assert_eq!(
             batch_rows,
             vec![
@@ -674,7 +708,9 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 (12, "gamma".to_string()),
             ]
         );
-        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_batch").execute(&mut conn)?;
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_batch")
+            .execute(&mut conn)
+            .await?;
 
         // Type-safe column selection from a ClickHouse join via `join_column`,
         // loaded through the Diesel connection into a typed `(i64, String)` tuple
@@ -686,7 +722,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .on(tenant_id.eq(tenants::tenant_id))
             .select((join_column(id), join_column(tenants::plan)))
             .order(join_column(id).asc())
-            .load(&mut conn)?;
+            .load(&mut conn)
+            .await?;
         assert_eq!(
             typed_join_rows,
             vec![
@@ -707,11 +744,13 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             INSERT INTO diesel_clickhouse_connection_batch VALUES (2, 'escaped \' quote; still literal');
             -- trailing comment with a semicolon ; should not become a statement
             "#,
-        )?;
+        )
+        .await?;
         let batch_rows = diesel::sql_query(
             "SELECT id, tenant_id FROM diesel_clickhouse_connection_batch ORDER BY id",
         )
-        .load::<ConnectionRow>(&mut conn)?;
+        .load::<ConnectionRow>(&mut conn)
+        .await?;
         assert_eq!(
             batch_rows,
             vec![
@@ -725,10 +764,9 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 },
             ]
         );
-        conn.batch_execute("DROP TABLE diesel_clickhouse_connection_batch; /* done ; */")?;
-        Ok(())
-    })
-    .await??;
+        conn.batch_execute("DROP TABLE diesel_clickhouse_connection_batch; /* done ; */")
+            .await?;
+    }
 
     let ddl = create_table("diesel_clickhouse_ddl_events")
         .if_not_exists()

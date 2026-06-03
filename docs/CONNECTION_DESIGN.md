@@ -1,12 +1,12 @@
-# Diesel `Connection` design notes
+# Diesel `AsyncConnection` design notes
 
-The crate now includes an initial HTTP-backed `ClickHouseConnection`. This document records the design constraints, current scope, and remaining work so the connection can evolve without pretending ClickHouse is a regular transactional OLTP backend.
+The crate includes a native async, HTTP-backed `AsyncClickHouseConnection` that implements [`diesel_async::AsyncConnection`] directly on top of the async `clickhouse` client's futures (no owned runtime, no `block_on`). This document records the design constraints, current scope, and remaining work so the connection can evolve without pretending ClickHouse is a regular transactional OLTP backend.
 
 ## Current spike
 
 Implemented and live-tested:
 
-- `ClickHouseConnection::establish("http://user:password@host:8123/database")` and explicit `ClickHouseConnectionOptions` construction.
+- `AsyncClickHouseConnection::establish("http://user:password@host:8123/database")` and explicit `ClickHouseConnectionOptions` construction.
 - Idiomatic Diesel `load`, `first`, and `execute` over ClickHouse HTTP.
 - Diesel bind collection for primitive/text values, sent as ClickHouse HTTP server-side parameters (`{dc_pN:Type}` plus `param_dc_pN`) where type metadata is concrete.
 - Row loading through `TabSeparatedWithNamesAndTypes` into Diesel `Row`/`Field` abstractions.
@@ -14,7 +14,7 @@ Implemented and live-tested:
 - `Array<T>` row decoding into `Vec<T>`, `Map<K, V>` row decoding into `BTreeMap<K, V>`, and `Tuple<...>` row decoding into Rust tuples.
 - String-form Decimal/Date/DateTime/UUID/IP/JSON decoding for ClickHouse text formats, plus optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256.
 - `diesel::sql_query(...)` with `QueryableByName`.
-- `ClickHouseConnection::insert_batch(table, rows)` for high-throughput multi-row ingestion through the `clickhouse` client's native RowBinary inserter (see "Writing data" in `docs/USAGE.md`).
+- `AsyncClickHouseConnection::insert_batch(table, rows)` for high-throughput multi-row ingestion through the `clickhouse` client's native RowBinary inserter (see "Writing data" in `docs/USAGE.md`).
 - Explicit unsupported transaction errors.
 
 Remaining limitations:
@@ -26,7 +26,7 @@ Remaining limitations:
 
 ## Goals
 
-- Allow idiomatic Diesel calls such as `query.load::<T>(&mut conn)?` against ClickHouse.
+- Allow idiomatic Diesel calls such as `query.load::<T>(&mut conn).await?` against ClickHouse.
 - Reuse the existing `ClickHouse` backend and `QueryFragment<ClickHouse>` implementations.
 - Preserve Diesel's schema-driven compile-time type checks.
 - Support deterministic bind handling for the SQL forms already covered by render and live tests.
@@ -117,7 +117,7 @@ The first implementation should prefer explicit unsupported errors over surprisi
 
 This section records the post-context-clear hardening decisions. Keep `docs/FEATURE_MATRIX.md` as the canonical feature-status table; use this section for connection-specific design rationale and future revisit points.
 
-All active connection-hardening TODOs are complete for the initial HTTP-backed `ClickHouseConnection`. Remaining notes below are future revisit triggers, not blockers for treating the current connection surface as stable.
+All active connection-hardening TODOs are complete for the initial HTTP-backed `AsyncClickHouseConnection`. Remaining notes below are future revisit triggers, not blockers for treating the current connection surface as stable.
 
 1. ✅ **Native decimal story — complete**
    - Decision: add an optional `bigdecimal` feature while keeping string-form decimals as the dependency-free baseline.
@@ -133,7 +133,7 @@ All active connection-hardening TODOs are complete for the initial HTTP-backed `
    - Future revisit: true binary vector parameters remain out of scope for the HTTP/text parameter path.
 
 3. ✅ **More connection live tests — complete**
-   - Nullable scalar combinations through `ClickHouseConnection` are covered.
+   - Nullable scalar combinations through `AsyncClickHouseConnection` are covered.
    - Nullable arrays/maps/tuples are covered for ergonomic Diesel targets.
    - `Dynamic` and `Variant` are covered with required experimental settings.
    - Raw SQL structs via `QueryableByName` are covered for the supported semi-structured/composite cases.
@@ -145,14 +145,14 @@ All active connection-hardening TODOs are complete for the initial HTTP-backed `
 
 5. ✅ **Connection options/settings API — complete**
    - Added `ClickHouseConnectionOptions` as the explicit configuration abstraction for URL, user, password, database, and HTTP query options/settings.
-   - `ClickHouseConnection::establish` delegates to `ClickHouseConnectionOptions::from_url`, preserving existing URL parsing behavior while exposing builder-style setters for code-assembled configuration.
+   - `AsyncClickHouseConnection::establish` delegates to `ClickHouseConnectionOptions::from_url`, preserving existing URL parsing behavior while exposing builder-style setters for code-assembled configuration.
    - No ClickHouse settings that alter semantics are silently injected; callers add options/settings explicitly.
 
 6. ✅ **Protocol boundary — complete for HTTP-first design**
    - Decision: do not introduce a native-protocol abstraction yet.
    - The HTTP-backed public API shape is now proven enough for the initial connection: URL/options construction, loading, execution, bind handling, unsupported transactions, and migration-style batches are covered by focused tests.
    - Keep native protocol as future work only if binary fidelity becomes necessary for true binary vector parameters, aggregate states, or other values that cannot be represented well through ClickHouse HTTP text formats.
-   - Until there is a concrete native client target, avoid a premature transport trait; keep row loading, bind preparation, and HTTP execution as internal helpers that can be extracted later without changing the public `ClickHouseConnection` API.
+   - Until there is a concrete native client target, avoid a premature transport trait; keep row loading, bind preparation, and HTTP execution as internal helpers that can be extracted later without changing the public `AsyncClickHouseConnection` API.
 
 ## Suggested implementation order
 

@@ -10,6 +10,19 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Changed
+- **Breaking:** the connection is now native async. `ClickHouseConnection` is replaced by `AsyncClickHouseConnection`, which implements [`diesel_async::AsyncConnection`] directly over the async `clickhouse` client's futures — no owned Tokio runtime and no `block_on`. Drive queries with `diesel_async::RunQueryDsl` and `.await` (e.g. `query.load(&mut conn).await?`); `establish`, `ClickHouseConnectionOptions::connect`, `insert_batch`, and `batch_execute` are now `async`. Callers no longer need `spawn_blocking`/`r2d2`, and the "Cannot start a runtime from within a runtime" hazard is gone.
+  - Import `diesel_async::RunQueryDsl` explicitly; it shadows the `RunQueryDsl` from diesel's prelude glob so method resolution picks the async connection's methods.
+  - Sync/blocking callers (and `diesel_migrations`) can wrap it in diesel-async's `AsyncConnectionWrapper` via the new `async-connection-wrapper` feature.
+
+### Added
+- `diesel-async` 0.7 dependency and native `AsyncConnection`/`AsyncConnectionCore`/`SimpleAsyncConnection` impls for ClickHouse.
+- Opt-in connection pooling behind the `bb8`, `deadpool`, and `mobc` features (each enables the matching diesel-async pool integration plus the `PoolableConnection` impl).
+- `async-connection-wrapper` feature exposing diesel-async's sync/migration adapter.
+
+### Removed
+- The blocking `ClickHouseConnection`, its owned current-thread runtime, and the `ClickHouseCursor` cursor type (the async connection streams rows instead).
+
 ## [0.5.0] — 2026-06-03
 
 ### Added

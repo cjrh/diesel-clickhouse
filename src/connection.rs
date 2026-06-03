@@ -1,4 +1,4 @@
-//! Synchronous Diesel connection backed by ClickHouse's HTTP interface.
+//! Native async Diesel connection backed by ClickHouse's HTTP interface.
 //!
 //! The connection intentionally models ClickHouse as ClickHouse: transactions
 //! are reported as unsupported, statement execution reports the row count
@@ -6,6 +6,10 @@
 //! is available), and result loading uses ClickHouse's
 //! `TabSeparatedWithNamesAndTypes` format as a simple transport for Diesel's row
 //! deserializer.
+//!
+//! It implements [`diesel_async::AsyncConnection`] directly on top of the async
+//! `clickhouse` client's futures — there is no hidden runtime and no `block_on`.
+//! Drive it from an async context with `diesel_async::RunQueryDsl` and `.await`.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -15,63 +19,60 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use diesel::connection::{
-    CacheSize, Connection, ConnectionSealed, DefaultLoadingMode, Instrumentation,
-    InstrumentationEvent, LoadConnection, SimpleConnection, StrQueryHelper, TransactionManager,
-    TransactionManagerStatus, WithMetadataLookup, get_default_instrumentation,
+    CacheSize, Instrumentation, InstrumentationEvent, StrQueryHelper, TransactionManagerStatus,
+    get_default_instrumentation,
 };
-use diesel::expression::QueryMetadata;
 use diesel::query_builder::{
-    Query, QueryBuilder, QueryFragment, QueryId, bind_collector::RawBytesBindCollector,
+    AsQuery, QueryBuilder, QueryFragment, QueryId, bind_collector::RawBytesBindCollector,
 };
 use diesel::result::{ConnectionError, ConnectionResult, DatabaseErrorKind, Error, QueryResult};
 use diesel::row::{Field, PartialRow, Row, RowIndex, RowSealed};
-use tokio::runtime::{Builder, Runtime};
+use diesel_async::{
+    AsyncConnection, AsyncConnectionCore, SimpleAsyncConnection, TransactionManager,
+};
+use futures_util::future::BoxFuture;
+use futures_util::stream::{self, BoxStream};
+use futures_util::{FutureExt, StreamExt};
 
 use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata};
 
-/// A synchronous Diesel connection for ClickHouse over HTTP.
+/// A native async Diesel connection for ClickHouse over HTTP.
 ///
-/// This is the first connection implementation spike. It supports idiomatic
-/// Diesel loading for primitive, text, nullable, and common composite result values while keeping
-/// ClickHouse-specific semantics explicit: transactions are unsupported, and
-/// command execution reports the number of written rows ClickHouse declares in
-/// its `X-ClickHouse-Summary` response trailer, falling back to `0` for
-/// statements (such as DDL) that ClickHouse does not count.
+/// Implements [`diesel_async::AsyncConnection`], so it composes with
+/// `diesel_async::RunQueryDsl` and the `bb8`/`deadpool`/`mobc` connection pools.
+/// It supports idiomatic Diesel loading for primitive, text, nullable, and
+/// common composite result values while keeping ClickHouse-specific semantics
+/// explicit: transactions are unsupported, and command execution reports the
+/// number of written rows ClickHouse declares in its `X-ClickHouse-Summary`
+/// response trailer, falling back to `0` for statements (such as DDL) that
+/// ClickHouse does not count.
 ///
-/// # Blocking I/O and async runtimes
+/// # Async usage
 ///
-/// Like Diesel's other connections, this is a **blocking** connection. It owns
-/// a current-thread Tokio runtime and drives the async `clickhouse` client with
-/// `block_on`. Tokio forbids both `block_on` and runtime `Drop` from inside an
-/// active async task, so you must **not** call `load`/`execute`/`batch_execute`
-/// — or drop the connection — directly from an `async fn` running on the Tokio
-/// executor. Doing so panics with "Cannot start a runtime from within a
-/// runtime". (This is not specific to ClickHouse; Diesel's `PgConnection` and
-/// friends are blocking too.)
-///
-/// Use the connection from a blocking context: ordinary synchronous code, a
-/// dedicated thread, a blocking connection pool such as `r2d2`, or
-/// [`tokio::task::spawn_blocking`]:
+/// Queries return futures; drive them from any async task with `.await`. The
+/// connection drives the async `clickhouse` client directly, so — unlike a
+/// blocking Diesel connection — there is no owned runtime and no restriction on
+/// calling it from inside an `async fn`:
 ///
 /// ```ignore
-/// let rows = tokio::task::spawn_blocking(move || {
-///     events::table.select(events::id).load::<i64>(&mut conn)
-/// })
-/// .await??;
+/// use diesel_async::{AsyncConnection, RunQueryDsl};
+/// use diesel_clickhouse::AsyncClickHouseConnection;
+///
+/// let mut conn = AsyncClickHouseConnection::establish(database_url).await?;
+/// let ids: Vec<i64> = events::table.select(events::id).load(&mut conn).await?;
 /// ```
 ///
-/// A native `diesel-async` `AsyncConnection` is the idiomatic path for async
-/// callers and is a candidate for future work.
+/// Callers stuck in a blocking context (or running `diesel_migrations`) can wrap
+/// it with diesel-async's `AsyncConnectionWrapper` (enable the
+/// `async-connection-wrapper` feature).
 #[allow(missing_debug_implementations)]
-pub struct ClickHouseConnection {
+pub struct AsyncClickHouseConnection {
     client: clickhouse::Client,
-    runtime: Runtime,
     transaction_state: TransactionManagerStatus,
-    metadata_lookup: (),
     instrumentation: Option<Box<dyn Instrumentation>>,
 }
 
-/// Explicit configuration for establishing a [`ClickHouseConnection`].
+/// Explicit configuration for establishing an [`AsyncClickHouseConnection`].
 ///
 /// Use [`ClickHouseConnectionOptions::from_url`] for Diesel-style database URLs
 /// with credentials, database, and query options encoded in one string. Use
@@ -100,7 +101,7 @@ impl ClickHouseConnectionOptions {
         }
     }
 
-    /// Parse the same URL shape accepted by [`ClickHouseConnection::establish`].
+    /// Parse the same URL shape accepted by [`AsyncClickHouseConnection::establish`].
     pub fn from_url(database_url: &str) -> ConnectionResult<Self> {
         let parsed = url::Url::parse(database_url)
             .map_err(|err| ConnectionError::InvalidConnectionUrl(err.to_string()))?;
@@ -158,7 +159,11 @@ impl ClickHouseConnectionOptions {
     }
 
     /// Establish a connection using these explicit options.
-    pub fn connect(self) -> ConnectionResult<ClickHouseConnection> {
+    ///
+    /// Builds the ClickHouse client and runs a `SELECT 1` health check so the
+    /// returned connection is known to be reachable, mirroring
+    /// [`AsyncClickHouseConnection::establish`].
+    pub async fn connect(self) -> ConnectionResult<AsyncClickHouseConnection> {
         let mut client = clickhouse::Client::default()
             .with_url(&self.url)
             .with_product_info("diesel-clickhouse", env!("CARGO_PKG_VERSION"));
@@ -176,28 +181,27 @@ impl ClickHouseConnectionOptions {
             client = client.with_setting(name, value);
         }
 
-        let mut conn = ClickHouseConnection::with_client(client)?;
+        let mut conn = AsyncClickHouseConnection::with_client(client);
         conn.execute_sql("SELECT 1 FORMAT Null")
+            .await
             .map_err(ConnectionError::CouldntSetupConfiguration)?;
         Ok(conn)
     }
 }
 
-impl ClickHouseConnection {
-    /// Build a Diesel connection around an already-configured ClickHouse client.
-    pub fn with_client(client: clickhouse::Client) -> ConnectionResult<Self> {
-        let runtime = Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|err| ConnectionError::BadConnection(err.to_string()))?;
-
-        Ok(Self {
+impl AsyncClickHouseConnection {
+    /// Build a connection around an already-configured ClickHouse client.
+    ///
+    /// This is a pure constructor: it performs no I/O and does not health-check
+    /// the endpoint. Use [`AsyncClickHouseConnection::establish`] or
+    /// [`ClickHouseConnectionOptions::connect`] when you want the `SELECT 1`
+    /// reachability check.
+    pub fn with_client(client: clickhouse::Client) -> Self {
+        Self {
             client,
-            runtime,
             transaction_state: TransactionManagerStatus::default(),
-            metadata_lookup: (),
             instrumentation: get_default_instrumentation(),
-        })
+        }
     }
 
     /// Access the underlying ClickHouse client for ClickHouse-specific setup.
@@ -230,30 +234,28 @@ impl ClickHouseConnection {
     ///     tenant_id: String,
     /// }
     ///
-    /// let written = conn.insert_batch("events", events)?;
+    /// let written = conn.insert_batch("events", events).await?;
     /// ```
     ///
     /// For long-running, periodically-flushed ingestion, reach for the client's
     /// `inserter(...)` directly via [`client`](Self::client).
-    pub fn insert_batch<Row, Rows>(&mut self, table: &str, rows: Rows) -> QueryResult<usize>
+    pub async fn insert_batch<Row, Rows>(&mut self, table: &str, rows: Rows) -> QueryResult<usize>
     where
         Row: clickhouse::RowOwned + clickhouse::RowWrite,
         Rows: IntoIterator<Item = Row>,
     {
-        self.runtime.block_on(async {
-            let mut insert = self
-                .client
-                .insert::<Row>(table)
-                .await
-                .map_err(clickhouse_error)?;
-            let mut written = 0usize;
-            for row in rows {
-                insert.write(&row).await.map_err(clickhouse_error)?;
-                written += 1;
-            }
-            insert.end().await.map_err(clickhouse_error)?;
-            Ok(written)
-        })
+        let mut insert = self
+            .client
+            .insert::<Row>(table)
+            .await
+            .map_err(clickhouse_error)?;
+        let mut written = 0usize;
+        for row in rows {
+            insert.write(&row).await.map_err(clickhouse_error)?;
+            written += 1;
+        }
+        insert.end().await.map_err(clickhouse_error)?;
+        Ok(written)
     }
 
     fn render_query<T>(&mut self, source: &T) -> QueryResult<PreparedQuery>
@@ -265,13 +267,16 @@ impl ClickHouseConnection {
         source.to_sql(&mut query_builder, &backend)?;
         let sql = query_builder.finish();
 
+        // ClickHouse's `TypeMetadata::MetadataLookup` is `()`, so the bind
+        // collector needs no connection-held lookup state.
+        let mut metadata_lookup = ();
         let mut bind_collector = RawBytesBindCollector::<ClickHouse>::new();
-        source.collect_binds(&mut bind_collector, &mut self.metadata_lookup, &backend)?;
+        source.collect_binds(&mut bind_collector, &mut metadata_lookup, &backend)?;
         parameterize_binds(&sql, &bind_collector.metadata, &bind_collector.binds)
     }
 
-    fn execute_sql(&mut self, sql: &str) -> QueryResult<()> {
-        self.execute_prepared(PreparedQuery::plain(sql))?;
+    async fn execute_sql(&mut self, sql: &str) -> QueryResult<()> {
+        self.execute_prepared(PreparedQuery::plain(sql)).await?;
         Ok(())
     }
 
@@ -286,13 +291,13 @@ impl ClickHouseConnection {
     /// completed write instead of mid-flight progress. The response body is
     /// empty for the DDL/DML this path runs (and `FORMAT Null` health checks
     /// override the requested format), so collecting and dropping it is cheap.
-    fn execute_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<Option<u64>> {
+    async fn execute_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<Option<u64>> {
         let query = StrQueryHelper::new(&prepared.sql);
         self.instrumentation
             .on_connection_event(InstrumentationEvent::start_query(&query));
 
         let client_sql = escape_clickhouse_client_template(&prepared.sql);
-        let result = self.runtime.block_on(async {
+        let result = async {
             let mut http_query = self
                 .client
                 .query(&client_sql)
@@ -305,7 +310,8 @@ impl ClickHouseConnection {
                 .map_err(clickhouse_error)?;
             cursor.collect().await.map_err(clickhouse_error)?;
             Ok::<_, Error>(cursor.summary().and_then(|summary| summary.written_rows()))
-        });
+        }
+        .await;
 
         self.instrumentation
             .on_connection_event(InstrumentationEvent::finish_query(
@@ -315,13 +321,13 @@ impl ClickHouseConnection {
         result
     }
 
-    fn load_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<Vec<ClickHouseRow>> {
+    async fn load_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<Vec<ClickHouseRow>> {
         let query = StrQueryHelper::new(&prepared.sql);
         self.instrumentation
             .on_connection_event(InstrumentationEvent::start_query(&query));
 
         let client_sql = escape_clickhouse_client_template(&prepared.sql);
-        let result = self.runtime.block_on(async {
+        let result = async {
             let mut http_query = self.client.query(&client_sql);
             for (name, value) in prepared.params {
                 http_query = http_query.with_setting(name, value);
@@ -330,7 +336,8 @@ impl ClickHouseConnection {
                 .fetch_bytes("TabSeparatedWithNamesAndTypes")
                 .map_err(clickhouse_error)?;
             cursor.collect().await.map_err(clickhouse_error)
-        });
+        }
+        .await;
 
         let result = result.and_then(|bytes| parse_rows(&bytes));
         self.instrumentation
@@ -342,28 +349,71 @@ impl ClickHouseConnection {
     }
 }
 
-impl SimpleConnection for ClickHouseConnection {
-    fn batch_execute(&mut self, query: &str) -> QueryResult<()> {
+impl SimpleAsyncConnection for AsyncClickHouseConnection {
+    async fn batch_execute(&mut self, query: &str) -> QueryResult<()> {
         for statement in split_statements(query) {
-            self.execute_sql(statement)?;
+            self.execute_sql(statement).await?;
         }
         Ok(())
     }
 }
 
-impl ConnectionSealed for ClickHouseConnection {}
-
-impl Connection for ClickHouseConnection {
+impl AsyncConnectionCore for AsyncClickHouseConnection {
+    type ExecuteFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<usize>>;
+    type LoadFuture<'conn, 'query> = BoxFuture<'conn, QueryResult<Self::Stream<'conn, 'query>>>;
+    type Stream<'conn, 'query> = BoxStream<'conn, QueryResult<ClickHouseRow>>;
+    type Row<'conn, 'query> = ClickHouseRow;
     type Backend = ClickHouse;
+
+    fn load<'conn, 'query, T>(&'conn mut self, source: T) -> Self::LoadFuture<'conn, 'query>
+    where
+        T: AsQuery + 'query,
+        T::Query: QueryFragment<Self::Backend> + QueryId + 'query,
+    {
+        // Render to SQL + binds synchronously so the returned future owns only
+        // `Send` data and never captures the (possibly non-`Send`) query `T`.
+        let query = source.as_query();
+        let prepared = self.render_query(&query);
+        async move {
+            let rows = self.load_prepared(prepared?).await?;
+            Ok(stream::iter(rows.into_iter().map(Ok)).boxed())
+        }
+        .boxed()
+    }
+
+    fn execute_returning_count<'conn, 'query, T>(
+        &'conn mut self,
+        source: T,
+    ) -> Self::ExecuteFuture<'conn, 'query>
+    where
+        T: QueryFragment<Self::Backend> + QueryId + 'query,
+    {
+        let prepared = self.render_query(&source);
+        async move {
+            // ClickHouse reports written rows in its `X-ClickHouse-Summary`
+            // trailer; statements it does not count — DDL, and the background
+            // mutations behind some `ALTER ... DELETE`/`UPDATE` forms — omit it,
+            // so report `0` rather than guess. See `docs/CONNECTION_DESIGN.md`.
+            let written_rows = self.execute_prepared(prepared?).await?;
+            Ok(written_rows.unwrap_or(0) as usize)
+        }
+        .boxed()
+    }
+}
+
+impl AsyncConnection for AsyncClickHouseConnection {
     type TransactionManager = ClickHouseTransactionManager;
 
-    fn establish(database_url: &str) -> ConnectionResult<Self> {
+    async fn establish(database_url: &str) -> ConnectionResult<Self> {
         let mut instrumentation = get_default_instrumentation();
         instrumentation.on_connection_event(InstrumentationEvent::start_establish_connection(
             database_url,
         ));
 
-        let result = establish(database_url);
+        let result = match ClickHouseConnectionOptions::from_url(database_url) {
+            Ok(options) => options.connect().await,
+            Err(err) => Err(err),
+        };
 
         instrumentation.on_connection_event(InstrumentationEvent::finish_establish_connection(
             database_url,
@@ -373,21 +423,6 @@ impl Connection for ClickHouseConnection {
         let mut conn = result?;
         conn.instrumentation = instrumentation;
         Ok(conn)
-    }
-
-    fn execute_returning_count<T>(&mut self, source: &T) -> QueryResult<usize>
-    where
-        T: QueryFragment<Self::Backend> + QueryId,
-    {
-        let prepared = self.render_query(source)?;
-        let written_rows = self.execute_prepared(prepared)?;
-        // ClickHouse reports the number of written rows in its
-        // `X-ClickHouse-Summary` response trailer, which `execute_prepared`
-        // reads. Statements that ClickHouse does not count — DDL, and the
-        // background mutations behind some `ALTER ... DELETE`/`UPDATE` forms —
-        // omit `written_rows`; report `0` for those rather than guess. See
-        // `docs/CONNECTION_DESIGN.md`.
-        Ok(written_rows.unwrap_or(0) as usize)
     }
 
     fn transaction_state(&mut self) -> &mut TransactionManagerStatus {
@@ -403,72 +438,47 @@ impl Connection for ClickHouseConnection {
     }
 
     fn set_prepared_statement_cache_size(&mut self, _size: CacheSize) {
-        // ClickHouseConnection sends each query over HTTP without a prepared
-        // statement cache, so Diesel's cache-size knob is intentionally a no-op.
-    }
-}
-
-impl LoadConnection<DefaultLoadingMode> for ClickHouseConnection {
-    type Cursor<'conn, 'query>
-        = ClickHouseCursor
-    where
-        Self: 'conn;
-
-    type Row<'conn, 'query>
-        = ClickHouseRow
-    where
-        Self: 'conn;
-
-    fn load<'conn, 'query, T>(
-        &'conn mut self,
-        source: T,
-    ) -> QueryResult<Self::Cursor<'conn, 'query>>
-    where
-        T: Query + QueryFragment<Self::Backend> + QueryId + 'query,
-        Self::Backend: QueryMetadata<T::SqlType>,
-    {
-        let prepared = self.render_query(&source)?;
-        let rows = self.load_prepared(prepared)?;
-        Ok(rows.into_iter().map(Ok).collect::<Vec<_>>().into_iter())
-    }
-}
-
-impl WithMetadataLookup for ClickHouseConnection {
-    fn metadata_lookup(
-        &mut self,
-    ) -> &mut <Self::Backend as diesel::sql_types::TypeMetadata>::MetadataLookup {
-        &mut self.metadata_lookup
+        // Each query goes over HTTP without a prepared-statement cache, so
+        // Diesel's cache-size knob is intentionally a no-op.
     }
 }
 
 /// Transaction manager that makes unsupported ClickHouse transactions explicit.
+///
+/// ClickHouse has no general multi-statement transactions, so every begin /
+/// commit / rollback resolves to the same "unsupported" error rather than
+/// silently pretending to start a transaction.
 #[derive(Debug, Default)]
 pub struct ClickHouseTransactionManager;
 
-impl TransactionManager<ClickHouseConnection> for ClickHouseTransactionManager {
+impl TransactionManager<AsyncClickHouseConnection> for ClickHouseTransactionManager {
     type TransactionStateData = TransactionManagerStatus;
 
-    fn begin_transaction(_conn: &mut ClickHouseConnection) -> QueryResult<()> {
+    async fn begin_transaction(_conn: &mut AsyncClickHouseConnection) -> QueryResult<()> {
         Err(unsupported_transactions())
     }
 
-    fn rollback_transaction(_conn: &mut ClickHouseConnection) -> QueryResult<()> {
+    async fn rollback_transaction(_conn: &mut AsyncClickHouseConnection) -> QueryResult<()> {
         Err(unsupported_transactions())
     }
 
-    fn commit_transaction(_conn: &mut ClickHouseConnection) -> QueryResult<()> {
+    async fn commit_transaction(_conn: &mut AsyncClickHouseConnection) -> QueryResult<()> {
         Err(unsupported_transactions())
     }
 
     fn transaction_manager_status_mut(
-        conn: &mut ClickHouseConnection,
+        conn: &mut AsyncClickHouseConnection,
     ) -> &mut TransactionManagerStatus {
         &mut conn.transaction_state
     }
 }
 
-/// Iterator returned by [`ClickHouseConnection`] load operations.
-pub type ClickHouseCursor = std::vec::IntoIter<QueryResult<ClickHouseRow>>;
+/// Lets the `bb8`, `deadpool`, and `mobc` pools manage this connection.
+///
+/// The default `PoolableConnection` behaviour fits ClickHouse: `ping` issues a
+/// `SELECT 1`, and `is_broken` consults the (always-open) transaction manager.
+#[cfg(any(feature = "bb8", feature = "deadpool", feature = "mobc"))]
+impl diesel_async::pooled_connection::PoolableConnection for AsyncClickHouseConnection {}
 
 /// Column names and name→index lookup shared by every row in one result set.
 ///
@@ -553,10 +563,6 @@ impl<'a> Field<'a, ClickHouse> for ClickHouseField<'a> {
     fn value(&self) -> Option<<ClickHouse as diesel::backend::Backend>::RawValue<'_>> {
         self.value
     }
-}
-
-fn establish(database_url: &str) -> ConnectionResult<ClickHouseConnection> {
-    ClickHouseConnectionOptions::from_url(database_url)?.connect()
 }
 
 fn base_url(parsed: &url::Url) -> ConnectionResult<String> {
@@ -1280,9 +1286,9 @@ fn clickhouse_error(err: clickhouse::error::Error) -> Error {
     Error::DatabaseError(DatabaseErrorKind::Unknown, Box::new(err.to_string()))
 }
 
-impl fmt::Debug for ClickHouseConnection {
+impl fmt::Debug for AsyncClickHouseConnection {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("ClickHouseConnection")
+        f.debug_struct("AsyncClickHouseConnection")
             .field("transaction_state", &self.transaction_state)
             .finish_non_exhaustive()
     }
