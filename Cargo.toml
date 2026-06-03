@@ -26,13 +26,11 @@ tokio = { version = "1", features = ["rt"] }
 url = "2"
 
 [dev-dependencies]
+serde = { version = "1", features = ["derive"] }
 testcontainers = "0.27"
 testcontainers-modules = { version = "0.15", features = ["clickhouse"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 trybuild = "1"
-
-[lib]
-doctest = false
 
 [package.metadata.docs.rs]
 all-features = true

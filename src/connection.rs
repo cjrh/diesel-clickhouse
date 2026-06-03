@@ -1,9 +1,11 @@
 //! Synchronous Diesel connection backed by ClickHouse's HTTP interface.
 //!
-//! The connection intentionally models ClickHouse as ClickHouse: transactions are
-//! reported as unsupported, statement execution returns no affected-row count,
-//! and result loading uses ClickHouse's `TabSeparatedWithNamesAndTypes` format as
-//! a simple transport for Diesel's row deserializer.
+//! The connection intentionally models ClickHouse as ClickHouse: transactions
+//! are reported as unsupported, statement execution reports the row count
+//! ClickHouse returns in its `X-ClickHouse-Summary` response trailer (when one
+//! is available), and result loading uses ClickHouse's
+//! `TabSeparatedWithNamesAndTypes` format as a simple transport for Diesel's row
+//! deserializer.
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, HashMap};
@@ -31,9 +33,10 @@ use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata}
 ///
 /// This is the first connection implementation spike. It supports idiomatic
 /// Diesel loading for primitive, text, nullable, and common composite result values while keeping
-/// ClickHouse-specific semantics explicit: transactions are unsupported and
-/// command execution reports `0` affected rows because ClickHouse's HTTP
-/// interface does not provide OLTP-style row counts for DDL/mutations.
+/// ClickHouse-specific semantics explicit: transactions are unsupported, and
+/// command execution reports the number of written rows ClickHouse declares in
+/// its `X-ClickHouse-Summary` response trailer, falling back to `0` for
+/// statements (such as DDL) that ClickHouse does not count.
 ///
 /// # Blocking I/O and async runtimes
 ///
@@ -202,6 +205,57 @@ impl ClickHouseConnection {
         &self.client
     }
 
+    /// Insert many rows in a single columnar RowBinary request, returning the
+    /// number of rows sent.
+    ///
+    /// Diesel's multi-row `INSERT` cannot be expressed on a third-party backend
+    /// — its `BatchInsert` requires the SQL `DEFAULT` keyword that the orphan
+    /// rule reserves for Diesel's own backends — and looping single-row Diesel
+    /// inserts pays one escaped-text round trip per row. This drives the
+    /// `clickhouse` client's native RowBinary inserter instead: the whole batch
+    /// is encoded columnar and sent as one request, which is the high-throughput
+    /// write path ClickHouse is built for.
+    ///
+    /// `Row` is a `#[derive(clickhouse::Row, serde::Serialize)]` struct whose
+    /// fields name and type the target columns; `table` is the unquoted table
+    /// name. The batch is validated against the table's schema before sending
+    /// (a one-time metadata fetch). The whole insert is atomic from the client's
+    /// perspective: it is only committed when the final request returns `200`,
+    /// so an error means no rows from this call were accepted.
+    ///
+    /// ```ignore
+    /// #[derive(clickhouse::Row, serde::Serialize)]
+    /// struct EventRow {
+    ///     id: u64,
+    ///     tenant_id: String,
+    /// }
+    ///
+    /// let written = conn.insert_batch("events", events)?;
+    /// ```
+    ///
+    /// For long-running, periodically-flushed ingestion, reach for the client's
+    /// `inserter(...)` directly via [`client`](Self::client).
+    pub fn insert_batch<Row, Rows>(&mut self, table: &str, rows: Rows) -> QueryResult<usize>
+    where
+        Row: clickhouse::RowOwned + clickhouse::RowWrite,
+        Rows: IntoIterator<Item = Row>,
+    {
+        self.runtime.block_on(async {
+            let mut insert = self
+                .client
+                .insert::<Row>(table)
+                .await
+                .map_err(clickhouse_error)?;
+            let mut written = 0usize;
+            for row in rows {
+                insert.write(&row).await.map_err(clickhouse_error)?;
+                written += 1;
+            }
+            insert.end().await.map_err(clickhouse_error)?;
+            Ok(written)
+        })
+    }
+
     fn render_query<T>(&mut self, source: &T) -> QueryResult<PreparedQuery>
     where
         T: QueryFragment<ClickHouse> + QueryId,
@@ -217,23 +271,41 @@ impl ClickHouseConnection {
     }
 
     fn execute_sql(&mut self, sql: &str) -> QueryResult<()> {
-        self.execute_prepared(PreparedQuery::plain(sql))
+        self.execute_prepared(PreparedQuery::plain(sql))?;
+        Ok(())
     }
 
-    fn execute_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<()> {
+    /// Run a statement that yields no Diesel result set, returning the number of
+    /// rows ClickHouse reports writing when it provides one.
+    ///
+    /// This deliberately uses `fetch_bytes` rather than the `clickhouse`
+    /// client's fire-and-forget `execute`: `execute` discards the response,
+    /// while the byte cursor exposes the parsed `X-ClickHouse-Summary` trailer
+    /// that carries `written_rows`. `wait_end_of_query=1` makes ClickHouse
+    /// finish the statement before responding, so the summary reflects the
+    /// completed write instead of mid-flight progress. The response body is
+    /// empty for the DDL/DML this path runs (and `FORMAT Null` health checks
+    /// override the requested format), so collecting and dropping it is cheap.
+    fn execute_prepared(&mut self, prepared: PreparedQuery) -> QueryResult<Option<u64>> {
         let query = StrQueryHelper::new(&prepared.sql);
         self.instrumentation
             .on_connection_event(InstrumentationEvent::start_query(&query));
 
         let client_sql = escape_clickhouse_client_template(&prepared.sql);
-        let mut http_query = self.client.query(&client_sql);
-        for (name, value) in prepared.params {
-            http_query = http_query.with_setting(name, value);
-        }
-        let result = self
-            .runtime
-            .block_on(http_query.execute())
-            .map_err(clickhouse_error);
+        let result = self.runtime.block_on(async {
+            let mut http_query = self
+                .client
+                .query(&client_sql)
+                .with_setting("wait_end_of_query", "1");
+            for (name, value) in prepared.params {
+                http_query = http_query.with_setting(name, value);
+            }
+            let mut cursor = http_query
+                .fetch_bytes("TabSeparatedWithNamesAndTypes")
+                .map_err(clickhouse_error)?;
+            cursor.collect().await.map_err(clickhouse_error)?;
+            Ok::<_, Error>(cursor.summary().and_then(|summary| summary.written_rows()))
+        });
 
         self.instrumentation
             .on_connection_event(InstrumentationEvent::finish_query(
@@ -308,16 +380,14 @@ impl Connection for ClickHouseConnection {
         T: QueryFragment<Self::Backend> + QueryId,
     {
         let prepared = self.render_query(source)?;
-        self.execute_prepared(prepared)?;
-        // ClickHouse reports affected/written row counts in the
-        // `X-ClickHouse-Summary` HTTP response header, but the `clickhouse`
-        // client's `execute()` returns `()` and discards that header, so no
-        // count is available through the current transport. We return `0`
-        // rather than guess. Surfacing a real count would require either the
-        // upstream client exposing the summary or a native-protocol transport;
-        // callers needing insert acknowledgement should rely on a subsequent
-        // query. See `docs/CONNECTION_DESIGN.md`.
-        Ok(0)
+        let written_rows = self.execute_prepared(prepared)?;
+        // ClickHouse reports the number of written rows in its
+        // `X-ClickHouse-Summary` response trailer, which `execute_prepared`
+        // reads. Statements that ClickHouse does not count — DDL, and the
+        // background mutations behind some `ALTER ... DELETE`/`UPDATE` forms —
+        // omit `written_rows`; report `0` for those rather than guess. See
+        // `docs/CONNECTION_DESIGN.md`.
+        Ok(written_rows.unwrap_or(0) as usize)
     }
 
     fn transaction_state(&mut self) -> &mut TransactionManagerStatus {
@@ -414,8 +484,8 @@ struct RowHeader {
 
 /// Owned result row used by the ClickHouse connection.
 ///
-/// Holds only this row's field values; column names live in the shared
-/// [`RowHeader`].
+/// Holds only this row's field values; column names live in a shared
+/// `RowHeader`.
 #[derive(Debug, Clone)]
 pub struct ClickHouseRow {
     header: Arc<RowHeader>,

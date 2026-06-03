@@ -137,8 +137,9 @@ impl SqlDialect for ClickHouse {
     // ClickHouse) can only batch through a backend-specific `QueryFragment`
     // impl, which Rust's orphan rule forbids a third-party backend from writing.
     // We therefore declare no single-query batch support: single-row inserts go
-    // through Diesel, and high-throughput multi-row ingestion uses the
-    // `clickhouse` client's RowBinary inserter (see `docs/USAGE.md`).
+    // through Diesel, and high-throughput multi-row ingestion uses
+    // `ClickHouseConnection::insert_batch`, which drives the `clickhouse`
+    // client's RowBinary inserter (see `docs/USAGE.md`).
     type BatchInsertSupport = sql_dialect::batch_insert_support::DoesNotSupportBatchInsert;
     type ConcatClause = sql_dialect::concat_clause::ConcatWithPipesClause;
     type DefaultValueClauseForInsert = sql_dialect::default_value_clause::AnsiDefaultValueClause;
