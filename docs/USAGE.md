@@ -1,6 +1,6 @@
 # Usage guide
 
-`diesel-clickhouse` turns Diesel ASTs and ClickHouse-specific DSL nodes into ClickHouse SQL. You can either render SQL and execute it with a ClickHouse client, or use the initial synchronous `ClickHouseConnection` for idiomatic Diesel `load`/`execute` calls.
+`diesel-clickhouse` turns Diesel ASTs and ClickHouse-specific DSL nodes into ClickHouse SQL. You can either render SQL and execute it with a ClickHouse client, or use the native async `AsyncClickHouseConnection` for idiomatic Diesel `load`/`execute` calls.
 
 ## Render and execute
 
@@ -30,24 +30,29 @@ let rows: Vec<(String, u64, f64)> = Client::default()
 
 Rendered SQL uses backtick identifiers and `?` bind placeholders. Bind values are supplied to the external ClickHouse client in the same order Diesel rendered them.
 
-## Diesel `Connection`
+## Diesel `AsyncConnection`
 
-`ClickHouseConnection` is a synchronous Diesel connection backed by ClickHouse's HTTP interface:
+`AsyncClickHouseConnection` is a native async Diesel connection (a [`diesel_async::AsyncConnection`]) backed by ClickHouse's HTTP interface. Drive queries with `diesel_async`'s `RunQueryDsl` and `.await`:
 
 ```rust,ignore
 use diesel::prelude::*;
-use diesel_clickhouse::ClickHouseConnection;
+use diesel_async::{AsyncConnection, RunQueryDsl};
+use diesel_clickhouse::AsyncClickHouseConnection;
 
-let mut conn = ClickHouseConnection::establish(
+let mut conn = AsyncClickHouseConnection::establish(
     "http://default:password@localhost:8123/analytics",
-)?;
+)
+.await?;
 
 let rows: Vec<(String, i64)> = events::table
     .filter(events::tenant_id.eq("acme").and(events::success.eq(true)))
     .group_by(events::tenant_id)
     .select((events::tenant_id, diesel::dsl::count_star()))
-    .load(&mut conn)?;
+    .load(&mut conn)
+    .await?;
 ```
+
+> Import `diesel_async::RunQueryDsl` explicitly. It shadows the `RunQueryDsl` that `diesel::prelude::*` brings in, so `.load`/`.first`/`.execute` resolve to the async connection's methods rather than the (inapplicable) blocking ones.
 
 For explicit code-assembled configuration, use `ClickHouseConnectionOptions`:
 
@@ -59,7 +64,8 @@ let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
     .password("password")
     .database("analytics")
     .option("max_threads", "1")
-    .connect()?;
+    .connect()
+    .await?;
 ```
 
 The current connection supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `BigDecimal` values with the `bigdecimal` feature, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It sends supported Diesel-collected bind values as ClickHouse HTTP server-side parameters; ambiguous cases such as `NULL` HTTP parameters and abstract composite metadata fall back to escaped literal inlining. Literal `?` characters inside SQL strings/comments are preserved.
@@ -75,18 +81,28 @@ With that feature, `bigdecimal::BigDecimal` implements `FromSql`/`ToSql` for Die
 
 ClickHouse is not treated as an OLTP database: Diesel transaction APIs return a clear unsupported error. `execute` does report affected rows, though — it reads the `written_rows` field of ClickHouse's `X-ClickHouse-Summary` response trailer (running with `wait_end_of_query=1` so the count reflects the completed write), so an INSERT/mutation returns a real count. Statements ClickHouse does not count, such as DDL, report `0`.
 
-### Blocking I/O and async
+### Async runtime and pooling
 
-`ClickHouseConnection` is a **blocking** connection (like Diesel's `PgConnection`). It owns a current-thread Tokio runtime and drives the async `clickhouse` client with `block_on`. Tokio forbids `block_on` — and dropping a runtime — from inside an active async task, so do not call `load`/`execute`/`batch_execute`, or drop the connection, directly from an `async fn` running on the Tokio executor; that panics with "Cannot start a runtime from within a runtime". Run queries from a blocking context instead — synchronous code, a dedicated thread, an `r2d2` pool, or `spawn_blocking`:
+`AsyncClickHouseConnection` is a **native async** connection: it drives the async `clickhouse` client's futures directly, with no owned runtime and no `block_on`. Call `load`/`execute`/`batch_execute` from any async task with `.await` — including from inside an `async fn` on the Tokio executor (the restriction that applied to the previous blocking connection is gone).
 
-```rust,ignore
-let rows = tokio::task::spawn_blocking(move || {
-    events::table.select(events::id).load::<i64>(&mut conn)
-})
-.await??;
+For connection pooling it integrates with diesel-async's `bb8`, `deadpool`, and `mobc` pools. Enable the matching feature and use `AsyncDieselConnectionManager`:
+
+```toml
+[dependencies]
+diesel-clickhouse = { version = "...", features = ["bb8"] }
 ```
 
-A native `diesel-async` `AsyncConnection` is the idiomatic path for async callers and is candidate future work.
+```rust,ignore
+use diesel_async::pooled_connection::AsyncDieselConnectionManager;
+use diesel_async::pooled_connection::bb8::Pool;
+use diesel_clickhouse::AsyncClickHouseConnection;
+
+let config = AsyncDieselConnectionManager::<AsyncClickHouseConnection>::new(database_url);
+let pool = Pool::builder().build(config).await?;
+let mut conn = pool.get().await?;
+```
+
+If you need to drive the connection from blocking/synchronous code (or run `diesel_migrations`), enable the `async-connection-wrapper` feature and wrap it in diesel-async's `AsyncConnectionWrapper`.
 
 ## Writing data (inserts)
 
@@ -119,7 +135,7 @@ Single-row `execute` returns the number of written rows ClickHouse reports in it
 
 **Multi-row batch inserts (`.values(vec![...])`) are not expressible through Diesel's DSL.** Diesel's multi-row `BatchInsert` is hardwired to require the SQL `DEFAULT` keyword, and the only escape hatch is a backend-specific `QueryFragment` impl that the orphan rule reserves for Diesel's own backends. `to_sql`/`execute` on a Diesel batch insert will not compile. This is a hard limitation of building on Diesel's backend traits, not an oversight.
 
-**For multi-row ingestion, use [`ClickHouseConnection::insert_batch`](crate::ClickHouseConnection::insert_batch)**, which drives the `clickhouse` client's native RowBinary inserter for you — one columnar request for the whole batch, the high-throughput path ClickHouse is designed for:
+**For multi-row ingestion, use [`AsyncClickHouseConnection::insert_batch`](crate::AsyncClickHouseConnection::insert_batch)**, which drives the `clickhouse` client's native RowBinary inserter for you — one columnar request for the whole batch, the high-throughput path ClickHouse is designed for:
 
 ```rust,ignore
 #[derive(clickhouse::Row, serde::Serialize)]
@@ -129,12 +145,12 @@ struct EventRow {
 }
 
 // One columnar RowBinary request; returns the number of rows sent.
-let written = conn.insert_batch("events", events)?;
+let written = conn.insert_batch("events", events).await?;
 ```
 
 This sends one columnar RowBinary request for the whole batch instead of N round-trips of escaped text — orders of magnitude faster than looping single-row inserts, and the recommended approach for any non-trivial write volume.
 
-For long-running, periodically-flushed ingestion, reach for the client's `inserter(...)` directly. [`ClickHouseConnection::client`](crate::ClickHouseConnection::client) exposes the configured `clickhouse::Client`, which is cheap to clone and usable from your own async code:
+For long-running, periodically-flushed ingestion, reach for the client's `inserter(...)` directly. [`AsyncClickHouseConnection::client`](crate::AsyncClickHouseConnection::client) exposes the configured `clickhouse::Client`, which is cheap to clone and usable from your own async code:
 
 ```rust,ignore
 // `client.inserter(...)`' s `commit()`/`end()` return `Quantities` with the
@@ -219,4 +235,4 @@ Diesel's built-in `.inner_join(...).on(...)` is type-safe but **not executable**
 
 Diesel validates DSL expressions against Rust schema metadata from `table!`/`schema.rs`. That catches many mistakes: unknown columns, incompatible SQL types, aggregate/non-aggregate mixing, and select tuple shape mismatches.
 
-It does not connect to a development ClickHouse database during compilation. `ClickHouseConnection` can support future schema-generation tooling, but SQLx-style live query validation is not part of Diesel's normal model.
+It does not connect to a development ClickHouse database during compilation. `AsyncClickHouseConnection` can support future schema-generation tooling, but SQLx-style live query validation is not part of Diesel's normal model.

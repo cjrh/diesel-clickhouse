@@ -78,7 +78,7 @@ CLICKHOUSE_URL=http://default:password@localhost:8123/default \
 
 ## Live ClickHouse tests
 
-The integration battery in `tests/live_clickhouse.rs` starts a real `clickhouse/clickhouse-server` container with `testcontainers`, creates scratch tables, executes SQL rendered by this crate through the official `clickhouse` Rust client, verifies `ClickHouseConnection` against the same live server, and lets testcontainers tear the container down when the test exits.
+The integration battery in `tests/live_clickhouse.rs` starts a real `clickhouse/clickhouse-server` container with `testcontainers`, creates scratch tables, executes SQL rendered by this crate through the official `clickhouse` Rust client, verifies the native async `AsyncClickHouseConnection` against the same live server, and lets testcontainers tear the container down when the test exits.
 
 It is ignored by default so ordinary `cargo test` does not require Docker:
 

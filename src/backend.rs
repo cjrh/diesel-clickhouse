@@ -3,7 +3,7 @@
 //! The backend gives Diesel a ClickHouse-shaped SQL dialect (`backtick`
 //! identifiers, `?` placeholders and ANSI-ish `SELECT` layout).  It is shared
 //! by the render-only [`to_sql`] helper and the HTTP-backed
-//! [`ClickHouseConnection`](crate::ClickHouseConnection).
+//! [`AsyncClickHouseConnection`](crate::AsyncClickHouseConnection).
 
 use std::borrow::Cow;
 
@@ -138,7 +138,7 @@ impl SqlDialect for ClickHouse {
     // impl, which Rust's orphan rule forbids a third-party backend from writing.
     // We therefore declare no single-query batch support: single-row inserts go
     // through Diesel, and high-throughput multi-row ingestion uses
-    // `ClickHouseConnection::insert_batch`, which drives the `clickhouse`
+    // `AsyncClickHouseConnection::insert_batch`, which drives the `clickhouse`
     // client's RowBinary inserter (see `docs/USAGE.md`).
     type BatchInsertSupport = sql_dialect::batch_insert_support::DoesNotSupportBatchInsert;
     type ConcatClause = sql_dialect::concat_clause::ConcatWithPipesClause;
@@ -188,7 +188,7 @@ impl QueryFragment<ClickHouse> for BoxedLimitOffsetClause<'_, ClickHouse> {
 /// Render any Diesel AST node as ClickHouse SQL without the debug bind comment.
 ///
 /// Bind parameters are represented as `?`, matching the placeholder style used
-/// by many ClickHouse clients. [`ClickHouseConnection`](crate::ClickHouseConnection)
+/// by many ClickHouse clients. [`AsyncClickHouseConnection`](crate::AsyncClickHouseConnection)
 /// collects the corresponding Diesel bind values and sends the resulting query
 /// over ClickHouse HTTP.
 pub fn to_sql<T>(query: &T) -> QueryResult<String>
