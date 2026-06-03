@@ -378,7 +378,13 @@ impl TutorialDoc {
     }
 
     fn rust(&mut self, rust: &str) {
-        self.code("rust", rust);
+        // Tutorial Rust snippets are narrative fragments: they reference items
+        // defined elsewhere in the guide (`conn`, the table modules, the
+        // `*_SQL` consts) and use `.await` outside an `async fn`, so they are
+        // not standalone-compilable. Emit them as `rust,ignore` so
+        // `cargo test --doc` does not try to build them, matching the
+        // convention used throughout docs/USAGE.md.
+        self.code("rust,ignore", rust);
     }
 
     fn output(&mut self, output: &str) {
