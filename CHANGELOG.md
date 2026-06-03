@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-03
+
 ### Changed
 - **Breaking:** the connection is now native async. `ClickHouseConnection` is replaced by `AsyncClickHouseConnection`, which implements [`diesel_async::AsyncConnection`] directly over the async `clickhouse` client's futures — no owned Tokio runtime and no `block_on`. Drive queries with `diesel_async::RunQueryDsl` and `.await` (e.g. `query.load(&mut conn).await?`); `establish`, `ClickHouseConnectionOptions::connect`, `insert_batch`, and `batch_execute` are now `async`. Callers no longer need `spawn_blocking`/`r2d2`, and the "Cannot start a runtime from within a runtime" hazard is gone.
   - Import `diesel_async::RunQueryDsl` explicitly; it shadows the `RunQueryDsl` from diesel's prelude glob so method resolution picks the async connection's methods.
@@ -75,7 +77,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.6.0
 [0.5.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.5.0
 [0.4.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.4.0
 [0.3.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.3.0
