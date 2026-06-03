@@ -170,7 +170,7 @@ impl ClickHouseConnectionOptions {
             client = client.with_database(database);
         }
         for (name, value) in self.options {
-            client = client.with_option(name, value);
+            client = client.with_setting(name, value);
         }
 
         let mut conn = ClickHouseConnection::with_client(client)?;
@@ -228,7 +228,7 @@ impl ClickHouseConnection {
         let client_sql = escape_clickhouse_client_template(&prepared.sql);
         let mut http_query = self.client.query(&client_sql);
         for (name, value) in prepared.params {
-            http_query = http_query.with_option(name, value);
+            http_query = http_query.with_setting(name, value);
         }
         let result = self
             .runtime
@@ -252,7 +252,7 @@ impl ClickHouseConnection {
         let result = self.runtime.block_on(async {
             let mut http_query = self.client.query(&client_sql);
             for (name, value) in prepared.params {
-                http_query = http_query.with_option(name, value);
+                http_query = http_query.with_setting(name, value);
             }
             let mut cursor = http_query
                 .fetch_bytes("TabSeparatedWithNamesAndTypes")

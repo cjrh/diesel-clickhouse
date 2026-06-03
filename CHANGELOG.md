@@ -10,6 +10,9 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Changed
+- Upgraded the `clickhouse` client dependency from `0.13.3` to `0.15.0` and migrated the deprecated `with_option` calls to `with_setting` (behaviour-identical). MSRV unaffected (the client's 1.79 floor is below this crate's 1.96).
+
 ### Added
 - `join_column(...)` helper: makes a Diesel table column selectable from a `ClickHouseJoin` source while preserving its SQL type, replacing hand-written `sql::<...>("...")` join projections with type-checked select lists.
 - Idiomatic single-row inserts through `ClickHouseConnection`: `insert_into(t).values((col.eq(v), ...))` and `#[derive(Insertable)]` structs (with `#[diesel(treat_none_as_default_value = false)]`).

@@ -132,13 +132,14 @@ struct EventRow {
 // `conn.client()` returns the configured `clickhouse::Client`; it is cheap to
 // clone and can be used from your own async code.
 let client = conn.client().clone();
-let mut insert = client.insert::<EventRow>("events")?;
+let mut insert = client.insert::<EventRow>("events").await?;
 for row in batch {
     insert.write(&row).await?;
 }
 insert.end().await?; // one batched RowBinary request
 
-// For long-running, periodically-flushed ingestion use `client.inserter(...)`.
+// For long-running, periodically-flushed ingestion use `client.inserter(...)`,
+// whose `commit()`/`end()` return `Quantities` with the written row/byte counts.
 ```
 
 This sends one columnar RowBinary request for the whole batch instead of N round-trips of escaped text — orders of magnitude faster than looping single-row inserts, and the recommended approach for any non-trivial write volume.

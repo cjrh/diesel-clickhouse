@@ -157,10 +157,19 @@ async fn start_clickhouse() -> TestResult<ClickHouseFixture> {
     let host = node.get_host().await?;
     let port = node.get_host_port_ipv4(CLICKHOUSE_PORT).await?;
     let url = format!("http://{host}:{port}");
+    // These tests drive the raw `clickhouse` client to confirm that SQL rendered
+    // by this crate *executes and returns the expected values*, not that the
+    // assertion tuples' Rust types exactly match the ClickHouse column types.
+    // clickhouse 0.14+ defaults to `RowBinaryWithNamesAndTypes`, which strictly
+    // rejects benign reads like `UInt64` into `i64` or `UInt8` into `bool`.
+    // Disabling validation uses positional `RowBinary` and keeps these
+    // value-focused assertions lenient. (The `ClickHouseConnection` path is
+    // unaffected: it decodes text via `fetch_bytes`, not this serde path.)
     let client = clickhouse::Client::default()
         .with_url(&url)
         .with_user("default")
-        .with_password("password");
+        .with_password("password")
+        .with_validation(false);
     Ok(ClickHouseFixture {
         _node: node,
         url,
@@ -733,8 +742,8 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
     fixture
         .client
         .query(&to_sql(&type_showcase_ddl)?)
-        .with_option("allow_experimental_dynamic_type", "1")
-        .with_option("allow_experimental_variant_type", "1")
+        .with_setting("allow_experimental_dynamic_type", "1")
+        .with_setting("allow_experimental_variant_type", "1")
         .execute()
         .await?;
     let type_showcase_exists: u64 = fixture
