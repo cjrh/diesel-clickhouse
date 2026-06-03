@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-03
+
 ### Changed
 - Upgraded the `clickhouse` client dependency from `0.13.3` to `0.15.0` and migrated the deprecated `with_option` calls to `with_setting` (behaviour-identical). MSRV unaffected (the client's 1.79 floor is below this crate's 1.96).
 
@@ -49,7 +51,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.4.0
 [0.3.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.3.0
 [0.2.1]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.2.1
 [0.2.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.2.0
