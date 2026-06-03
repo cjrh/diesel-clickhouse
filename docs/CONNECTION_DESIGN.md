@@ -14,11 +14,12 @@ Implemented and live-tested:
 - `Array<T>` row decoding into `Vec<T>`, `Map<K, V>` row decoding into `BTreeMap<K, V>`, and `Tuple<...>` row decoding into Rust tuples.
 - String-form Decimal/Date/DateTime/UUID/IP/JSON decoding for ClickHouse text formats, plus optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256.
 - `diesel::sql_query(...)` with `QueryableByName`.
+- `ClickHouseConnection::insert_batch(table, rows)` for high-throughput multi-row ingestion through the `clickhouse` client's native RowBinary inserter (see "Writing data" in `docs/USAGE.md`).
 - Explicit unsupported transaction errors.
 
 Remaining limitations:
 
-- `execute` returns `0` affected rows. ClickHouse *does* report written/affected rows in the `X-ClickHouse-Summary` HTTP response header, but the `clickhouse` client's `execute()` returns `()` and discards that header, so the count is not reachable through the current transport. Surfacing a real count would require the upstream client exposing the summary, or a native-protocol transport; bolting on a parallel HTTP request just to read the header would widen the transport boundary this design deliberately keeps narrow.
+- `execute` reports written rows only when ClickHouse provides them. Statement execution reads the `written_rows` field of the `X-ClickHouse-Summary` response trailer that the `clickhouse` client exposes on its byte cursor, so INSERT/mutation `execute` calls return a real count. The execute path runs with `wait_end_of_query=1` so the summary reflects the completed write rather than mid-flight progress. Statements ClickHouse does not count — DDL, and the background mutations behind some `ALTER ... DELETE`/`UPDATE` forms — still report `0`.
 - Server-side parameters still use ClickHouse's textual HTTP parameter representation; true binary vector parameters need a richer transport representation.
 - Complex ClickHouse values such as aggregate states and native binary-only representations need expanded `FromSql`/`ToSql` coverage.
 - `batch_execute` uses a small SQL-aware splitter for migration-style batches; it respects semicolons in quoted literals and comments but is not intended to be a full ClickHouse SQL parser.

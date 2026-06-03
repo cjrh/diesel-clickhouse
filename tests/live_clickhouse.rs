@@ -122,6 +122,22 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    #[sql_name = "diesel_clickhouse_connection_batch"]
+    connection_batch (id) {
+        id -> BigInt,
+        tenant_id -> Text,
+    }
+}
+
+// Row type for the `insert_batch` RowBinary path: a `clickhouse::Row` +
+// `serde::Serialize` struct whose fields name and type the target columns.
+#[derive(clickhouse::Row, serde::Serialize)]
+struct BatchRow {
+    id: i64,
+    tenant_id: String,
+}
+
 diesel::joinable!(events -> tenants (tenant_id));
 diesel::allow_tables_to_appear_in_same_query!(
     events,
@@ -592,18 +608,22 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         )
         .execute(&mut conn)?;
 
-        diesel::insert_into(connection_inserts::table)
+        // `execute` now surfaces the written-row count ClickHouse reports in its
+        // `X-ClickHouse-Summary` trailer, so a single-row insert returns 1.
+        let tuple_insert_count = diesel::insert_into(connection_inserts::table)
             .values((
                 connection_inserts::id.eq(1_i64),
                 connection_inserts::tenant_id.eq("acme"),
             ))
             .execute(&mut conn)?;
-        diesel::insert_into(connection_inserts::table)
+        assert_eq!(tuple_insert_count, 1);
+        let struct_insert_count = diesel::insert_into(connection_inserts::table)
             .values(&NewConnectionInsert {
                 id: 2,
                 tenant_id: "beta",
             })
             .execute(&mut conn)?;
+        assert_eq!(struct_insert_count, 1);
 
         let inserted_rows: Vec<(i64, String)> = connection_inserts::table
             .select((connection_inserts::id, connection_inserts::tenant_id))
@@ -614,6 +634,47 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             vec![(1, "acme".to_string()), (2, "beta".to_string())]
         );
         diesel::sql_query("DROP TABLE diesel_clickhouse_connection_inserts").execute(&mut conn)?;
+
+        // Multi-row ingestion via `insert_batch`: one columnar RowBinary request
+        // for the whole batch, returning the number of rows sent.
+        diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_batch")
+            .execute(&mut conn)?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_connection_batch (id Int64, tenant_id String) \
+             ENGINE = Memory",
+        )
+        .execute(&mut conn)?;
+
+        let batch = vec![
+            BatchRow {
+                id: 10,
+                tenant_id: "acme".to_string(),
+            },
+            BatchRow {
+                id: 11,
+                tenant_id: "beta".to_string(),
+            },
+            BatchRow {
+                id: 12,
+                tenant_id: "gamma".to_string(),
+            },
+        ];
+        let batch_count = conn.insert_batch("diesel_clickhouse_connection_batch", batch)?;
+        assert_eq!(batch_count, 3);
+
+        let batch_rows: Vec<(i64, String)> = connection_batch::table
+            .select((connection_batch::id, connection_batch::tenant_id))
+            .order(connection_batch::id.asc())
+            .load(&mut conn)?;
+        assert_eq!(
+            batch_rows,
+            vec![
+                (10, "acme".to_string()),
+                (11, "beta".to_string()),
+                (12, "gamma".to_string()),
+            ]
+        );
+        diesel::sql_query("DROP TABLE diesel_clickhouse_connection_batch").execute(&mut conn)?;
 
         // Type-safe column selection from a ClickHouse join via `join_column`,
         // loaded through the Diesel connection into a typed `(i64, String)` tuple

@@ -73,7 +73,7 @@ diesel-clickhouse = { version = "...", features = ["bigdecimal"] }
 
 With that feature, `bigdecimal::BigDecimal` implements `FromSql`/`ToSql` for Diesel `Numeric` and ClickHouse `Decimal32<S>`/`Decimal64<S>`/`Decimal128<S>`/`Decimal256<S>`. String-form decimal loading remains available without extra dependencies.
 
-ClickHouse is not treated as an OLTP database: Diesel transaction APIs return a clear unsupported error, and `execute` returns `0`. ClickHouse *does* report written/affected rows in the `X-ClickHouse-Summary` response header, but the `clickhouse` client's `execute()` returns `()` and discards that header, so the count is not reachable through the current transport.
+ClickHouse is not treated as an OLTP database: Diesel transaction APIs return a clear unsupported error. `execute` does report affected rows, though — it reads the `written_rows` field of ClickHouse's `X-ClickHouse-Summary` response trailer (running with `wait_end_of_query=1` so the count reflects the completed write), so an INSERT/mutation returns a real count. Statements ClickHouse does not count, such as DDL, report `0`.
 
 ### Blocking I/O and async
 
@@ -115,34 +115,32 @@ diesel::insert_into(tenants::table)
 
 `#[diesel(treat_none_as_default_value = false)]` is **required** on ClickHouse. ClickHouse has no SQL `DEFAULT` keyword in `INSERT ... VALUES`, and the defaultable insert values Diesel emits by default only render on backends that support the keyword (or via a backend-specific impl, which Rust's orphan rule forbids a third-party backend from writing). Without the attribute, a `#[derive(Insertable)]` struct will not compile against this backend.
 
-**Multi-row batch inserts (`.values(vec![...])`) are not supported through Diesel.** Diesel's multi-row `BatchInsert` is hardwired to require the SQL `DEFAULT` keyword, and the only escape hatch is a backend-specific `QueryFragment` impl that the orphan rule reserves for Diesel's own backends. `to_sql`/`execute` on a batch insert will not compile. This is a hard limitation of building on Diesel's backend traits, not an oversight.
+Single-row `execute` returns the number of written rows ClickHouse reports in its `X-ClickHouse-Summary` response trailer (so a single-row insert returns `1`). DDL and the background mutations behind some `ALTER ... DELETE`/`UPDATE` forms are not counted by ClickHouse and report `0`.
 
-**For real ingestion, use the `clickhouse` client's RowBinary inserter**, which is also the high-throughput path ClickHouse is designed for. The connection exposes its configured client via [`ClickHouseConnection::client`]:
+**Multi-row batch inserts (`.values(vec![...])`) are not expressible through Diesel's DSL.** Diesel's multi-row `BatchInsert` is hardwired to require the SQL `DEFAULT` keyword, and the only escape hatch is a backend-specific `QueryFragment` impl that the orphan rule reserves for Diesel's own backends. `to_sql`/`execute` on a Diesel batch insert will not compile. This is a hard limitation of building on Diesel's backend traits, not an oversight.
+
+**For multi-row ingestion, use [`ClickHouseConnection::insert_batch`](crate::ClickHouseConnection::insert_batch)**, which drives the `clickhouse` client's native RowBinary inserter for you — one columnar request for the whole batch, the high-throughput path ClickHouse is designed for:
 
 ```rust,ignore
-use clickhouse::Row;
-use serde::Serialize;
-
-#[derive(Row, Serialize)]
+#[derive(clickhouse::Row, serde::Serialize)]
 struct EventRow {
     id: u64,
     tenant_id: String,
 }
 
-// `conn.client()` returns the configured `clickhouse::Client`; it is cheap to
-// clone and can be used from your own async code.
-let client = conn.client().clone();
-let mut insert = client.insert::<EventRow>("events").await?;
-for row in batch {
-    insert.write(&row).await?;
-}
-insert.end().await?; // one batched RowBinary request
-
-// For long-running, periodically-flushed ingestion use `client.inserter(...)`,
-// whose `commit()`/`end()` return `Quantities` with the written row/byte counts.
+// One columnar RowBinary request; returns the number of rows sent.
+let written = conn.insert_batch("events", events)?;
 ```
 
 This sends one columnar RowBinary request for the whole batch instead of N round-trips of escaped text — orders of magnitude faster than looping single-row inserts, and the recommended approach for any non-trivial write volume.
+
+For long-running, periodically-flushed ingestion, reach for the client's `inserter(...)` directly. [`ClickHouseConnection::client`](crate::ClickHouseConnection::client) exposes the configured `clickhouse::Client`, which is cheap to clone and usable from your own async code:
+
+```rust,ignore
+// `client.inserter(...)`' s `commit()`/`end()` return `Quantities` with the
+// written row/byte counts, and flush on size/row/time thresholds.
+let client = conn.client().clone();
+```
 
 ## Schema declarations
 
