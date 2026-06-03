@@ -493,6 +493,7 @@ dependencies = [
  "bigdecimal",
  "clickhouse",
  "diesel",
+ "serde",
  "testcontainers",
  "testcontainers-modules",
  "tokio",

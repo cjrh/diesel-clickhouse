@@ -10,6 +10,15 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- `ClickHouseConnection::insert_batch(table, rows)`: multi-row ingestion through the `clickhouse` client's native RowBinary inserter (one columnar request per batch), returning the number of rows sent. Diesel's DSL still cannot express multi-row `INSERT` on a third-party backend; this is the supported high-throughput write path.
+
+### Changed
+- `execute`/`execute_returning_count` now report the number of written rows ClickHouse declares in its `X-ClickHouse-Summary` response trailer instead of always returning `0`. The execute path runs with `wait_end_of_query=1` so the count reflects the completed write. Statements ClickHouse does not count (DDL, some background `ALTER ... DELETE`/`UPDATE` mutations) still report `0`.
+
+### Fixed
+- `cargo test --doc` is clean again: the narrative `docs/TUTORIAL.md` snippets are marked `ignore` (they reference schema/bindings defined elsewhere in the guide and were never standalone-compilable), matching the convention already used in `docs/USAGE.md`.
+
 ## [0.4.0] — 2026-06-03
 
 ### Changed

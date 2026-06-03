@@ -38,7 +38,7 @@ The example downloads the public NYC taxi data from S3 when the `trips` table is
 
 ClickHouse SQL clients connect to the server directly. In Diesel, create a `ClickHouseConnection` from a URL or explicit options:
 
-```rust
+```rust,ignore
 use diesel::prelude::*;
 use diesel_clickhouse::{ClickHouseConnectionOptions, ClickHouseQueryDsl};
 
@@ -63,7 +63,7 @@ connection established
 
 Diesel's `table!` schema can declare just the columns your Rust queries use. The ClickHouse table created below has more columns than this compact schema; the example keeps only the columns used in the tutorial queries.
 
-```rust
+```rust,ignore
 diesel::table! {
     use diesel::sql_types::*;
     use diesel_clickhouse::sql_types::*;
@@ -139,7 +139,7 @@ CREATE TABLE IF NOT EXISTS `trips` (
 
 The same table is built with this crate's DDL builder. `DataType::custom(...)` is the escape hatch for ClickHouse type expressions that do not need a dedicated Rust enum variant, such as `FixedString(25)`.
 
-```rust
+```rust,ignore
 use diesel_clickhouse::{create_table, merge_tree, to_sql, DataType};
 
 let ddl = create_table("trips")
@@ -231,7 +231,7 @@ SELECT * FROM s3(
 
 This is a good place to use raw SQL with `batch_execute`, because ingestion from a ClickHouse table function is already ClickHouse-specific. The executable tutorial only performs the insert when the table is empty, which makes reruns safe against a reused database.
 
-```rust
+```rust,ignore
 use diesel::connection::SimpleConnection;
 
 let existing: i64 = trips::table
@@ -265,7 +265,7 @@ SELECT round(avg(tip_amount), 2) FROM trips
 
 Diesel version:
 
-```rust
+```rust,ignore
 use diesel::dsl::sql;
 use diesel::sql_types::Float;
 
@@ -293,7 +293,7 @@ GROUP BY passenger_count
 
 Diesel version:
 
-```rust
+```rust,ignore
 let by_passenger: Vec<(u8, f32)> = trips::table
     .group_by(trips::passenger_count)
     .select((
@@ -367,7 +367,7 @@ LIMIT 10
 
 Diesel version:
 
-```rust
+```rust,ignore
 let daily_pickups: Vec<(String, String, i64)> = trips::table
     .group_by((trips::pickup_date, trips::pickup_ntaname))
     .select((
@@ -460,7 +460,7 @@ LAYOUT(HASHED_ARRAY())
 
 Use `batch_execute` for dictionary DDL. The executable tutorial drops and recreates the dictionary first so repeated runs observe the same definition.
 
-```rust
+```rust,ignore
 conn.batch_execute("DROP DICTIONARY IF EXISTS taxi_zone_dictionary")?;
 conn.batch_execute(CREATE_DICTIONARY_SQL)?;
 ```
@@ -478,7 +478,7 @@ SELECT dictGet('taxi_zone_dictionary', 'Borough', 132);
 SELECT dictHas('taxi_zone_dictionary', 132);
 ```
 
-```rust
+```rust,ignore
 use diesel::sql_types::{Bool, Text};
 
 let borough: String = diesel::select(sql::<Text>(
@@ -521,7 +521,7 @@ GROUP BY borough_name
 ORDER BY total DESC
 ```
 
-```rust
+```rust,ignore
 fn pickup_borough_expr() -> diesel::expression::SqlLiteral<Text> {
     sql::<Text>(
         "dictGetOrDefault('taxi_zone_dictionary','Borough', \
@@ -593,7 +593,7 @@ ORDER BY total DESC
 
 Diesel's built-in ANSI join source is not always the shape ClickHouse expects for executable joins, and ClickHouse dictionaries are a particularly SQL-native feature. For this part of the tutorial, use `sql_query` plus `QueryableByName`:
 
-```rust
+```rust,ignore
 #[derive(Debug, diesel::QueryableByName)]
 struct BoroughTotal {
     #[diesel(sql_type = diesel::sql_types::BigInt)]
