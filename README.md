@@ -36,23 +36,11 @@ let query = events::table
 let sql = to_sql(&query)?;
 ```
 
-## Implemented so far
+## Supported Features
 
-- `ClickHouse` backend marker and query builder (`?` binds, backtick identifiers)
-- Initial `ClickHouseConnection` over ClickHouse HTTP for Diesel `load`, `first`, `execute`, `batch_execute`, explicit `ClickHouseConnectionOptions`, server-side HTTP parameters for supported binds, primitive/text/nullable rows, arrays into `Vec<T>`, maps into `BTreeMap<K, V>`, tuples into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `bigdecimal::BigDecimal` decimal support, and `sql_query`; `execute` returns the written-row count from ClickHouse's `X-ClickHouse-Summary` trailer; transactions intentionally return an unsupported error
-- Idiomatic single-row inserts through the connection — `insert_into(t).values((col.eq(v), ...))` and `#[derive(Insertable)]` structs (with `#[diesel(treat_none_as_default_value = false)]`); multi-row batch inserts are not expressible through Diesel's DSL on a third-party backend, so `ClickHouseConnection::insert_batch(table, rows)` drives the `clickhouse` client's native RowBinary inserter for high-throughput ingestion (see `docs/USAGE.md`)
-- SQL type markers: unsigned/wide integers, decimals, enums, tuples/nested, arrays, maps, low-cardinality, JSON, UUID, IPv4/IPv6, Point/Ring, Dynamic/Variant, BFloat16, AggregateFunction states, DateTime64
-- Function bindings via Diesel macros/custom fragments: `toStartOf*`, `toDateTime*`, `dateDiff`, `dateTrunc`, broad type conversions/`CAST`/`accurateCast*`, string/numeric/search helpers (`LIKE`/`ILIKE`, `match`, `multiMatch*`), URL/IP/encoding/hash helpers, vector distance and binary-reference helpers, lambda-based array/map helpers, `if`, `countIf`, `sumIf`, `avgIf`, `minIf`, `maxIf`, generic aggregate combinator builder, aggregate state/merge combinators, `uniq*`, `groupArray*`, `any*`, `argMax`, `argMin`, statistical aggregates (`stddev*`, `var*`, ANOVA, Mann-Whitney, `approx_top_sum`), array/map/JSON path helpers
-- Parametric/statistical aggregate fragments: `quantile*`, `quantiles*`, `quantileDeterministic`, `topK`, `histogram`, `corr`, `covar*`
-- Grouping modifiers: `WITH TOTALS`, `ROLLUP`, `CUBE`, `GROUPING SETS`, `GROUP BY ALL`, `GROUPING()`
-- Diesel-native query clauses covered for ClickHouse rendering: `WHERE`, `HAVING`, `ORDER BY`, `GROUP BY`, `LIMIT`/`OFFSET`, nullable predicates, and comparison/logical operators
-- Query wrappers for scalar `WITH` aliases, CTEs, `QUALIFY`, named `WINDOW`, `LIMIT BY`, `LIMIT ... WITH TIES`, `ORDER BY ... WITH FILL`, `SETTINGS`, `FORMAT`, `INTO OUTFILE`
-- Source wrappers for `FINAL`, `SAMPLE`, `SAMPLE ... OFFSET`, `PREWHERE`, `ARRAY JOIN`, `LEFT ARRAY JOIN`, ClickHouse `GLOBAL`/`ANY`/`ALL`/`ASOF`/`SEMI`/`ANTI` joins; use these join wrappers for executable ClickHouse join SQL rather than Diesel's parenthesized built-in join source rendering, and project columns with `join_column(...)` for a type-checked select list
-- Window helpers: `row_number`, `rank`, `dense_rank`, `lag`, `lead`, `first_value`, `last_value`, `.over_ch(...)`, `.over_window(...)`, `ROWS`/`RANGE` frame builders
-- DDL builders for `CREATE TABLE`, MergeTree-family/special engines, projections, vector similarity indexes, materialized views, and broad `ALTER TABLE` operations including mutations and partitions
-- `GLOBAL IN` / `GLOBAL NOT IN` operators
+See the [Feature Matrix](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/feature_matrix/index.html) for the currently supported and planned features.
 
-See `docs/USAGE.md` for usage guidance, `docs/TUTORIAL.md` for a ClickHouse NYC taxi tutorial translated to Diesel, `tests/sql_render.rs` for render examples, `docs/FEATURE_MATRIX.md` for the implementation checklist, and `docs/CONNECTION_DESIGN.md` for connection design notes.
+See `docs/USAGE.md` for usage guidance, `docs/TUTORIAL.md` for a ClickHouse NYC taxi tutorial translated to Diesel, `tests/sql_render.rs` for render examples, and `docs/CONNECTION_DESIGN.md` for connection design notes.
 
 ## Installation
 
