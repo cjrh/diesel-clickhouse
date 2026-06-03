@@ -90,6 +90,7 @@ pub use clauses::{
     into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col, prewhere,
     sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
 };
+pub use clickhouse;
 pub use connection::{
     ClickHouseConnection, ClickHouseConnectionOptions, ClickHouseCursor, ClickHouseField,
     ClickHouseRow, ClickHouseTransactionManager,

@@ -58,6 +58,10 @@ Enable native BigDecimal decimal values when needed:
 diesel-clickhouse = { version = "0.3", features = ["bigdecimal"] }
 ```
 
+Note that this crate re-exports `clickhouse` so you can use `diesel_clickhouse::clickhouse` to access the underlying client for features outside the scope of Diesel.
+We do not re-export `diesel` itself, so you have to verify that your `diesel` version matches.
+We are currently supporting Diesel (>=2.3, <2.4). 
+
 ## Tutorial
 
 The NYC taxi tutorial in `docs/TUTORIAL.md` shows ClickHouse SQL alongside equivalent Diesel code. It has an executable companion that can run the tutorial against a disposable ClickHouse container and write a Markdown report with observed results:
