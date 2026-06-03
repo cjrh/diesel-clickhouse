@@ -11,6 +11,17 @@ This crate provides a lightweight `ClickHouse` backend for rendering Diesel ASTs
 use diesel::prelude::*;
 use diesel_clickhouse::{count_if, quantile, to_sql, ClickHouseQueryDsl, Format};
 
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    events (tenant_id) {
+        tenant_id -> Text,
+        success -> Bool,
+        latency_ms -> Double,
+    }
+}
+
 let query = events::table
     .filter(events::tenant_id.eq("acme"))
     .group_by(events::tenant_id)
