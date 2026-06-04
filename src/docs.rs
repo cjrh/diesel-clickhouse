@@ -7,6 +7,9 @@
 #[doc = include_str!("../docs/CONNECTION_DESIGN.md")]
 pub mod connection_design {}
 
+#[doc = include_str!("../docs/COOKBOOK.md")]
+pub mod cookbook {}
+
 #[doc = include_str!("../docs/FEATURE_MATRIX.md")]
 pub mod feature_matrix {}
 

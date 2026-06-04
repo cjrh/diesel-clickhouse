@@ -2,6 +2,8 @@
 
 `diesel-clickhouse` turns Diesel ASTs and ClickHouse-specific DSL nodes into ClickHouse SQL. You can either render SQL and execute it with a ClickHouse client, or use the native async `AsyncClickHouseConnection` for idiomatic Diesel `load`/`execute` calls.
 
+> This guide explains the **model**. For copyable "how do I write this query?" recipes — raw SQL next to the equivalent Diesel, each verified by running both and asserting equal results — see the cookbook (`docs/COOKBOOK.md` in the repo, or `docs::cookbook` on docs.rs).
+
 ## Render and execute
 
 ```rust,ignore

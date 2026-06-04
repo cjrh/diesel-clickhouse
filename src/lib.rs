@@ -42,12 +42,24 @@
 //! SQL through your ClickHouse client of choice when you need client-specific
 //! behavior.
 //!
+//! ## Start here: choose your path
+//!
+//! - **Want Diesel to own the bind values?** Execute with
+//!   [`AsyncClickHouseConnection`] and `.load`/`.execute`.
+//! - **Rendering SQL for another ClickHouse client?** Use
+//!   [`to_sql_with_metadata`] and re-supply the bind values yourself.
+//! - **Need bulk ingestion?** Use [`AsyncClickHouseConnection::insert_batch`].
+//! - **Need ClickHouse syntax with no typed binding?** Use
+//!   `diesel::dsl::sql::<T>(...)`, but know its contents are unchecked.
+//!
 //! ## Guides
 //!
 //! Long-form Markdown guides from `./docs/` are rendered under [`docs`] on
 //! docs.rs:
 //!
-//! - [`docs::usage`] for usage guidance.
+//! - [`docs::usage`] for the model: execution modes, the safety trade-offs, caveats.
+//! - [`docs::cookbook`] for copyable "how do I write this query?" recipes, each
+//!   verified by running its raw SQL and Diesel form and asserting equal results.
 //! - [`docs::tutorial`] for the NYC taxi tutorial translated to Diesel.
 //! - [`docs::feature_matrix`] for the implementation checklist.
 //! - [`docs::connection_design`] for connection design notes.
