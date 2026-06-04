@@ -17,6 +17,7 @@ use diesel::query_builder::{AsQuery, AstPass, Query, QueryFragment, QueryId};
 use diesel::query_dsl::{QueryDsl, RunQueryDsl, methods::SelectDsl};
 use diesel::query_source::{AppearsInFromClause, Plus, QuerySource};
 use diesel::result::{Error, QueryResult};
+use diesel::sql_types::BoolOrNullableBool;
 
 use crate::backend::ClickHouse;
 
@@ -139,12 +140,18 @@ where
     }
 
     /// Finish the join with an `ON predicate` clause.
+    ///
+    /// The predicate must be boolean-typed (`Bool` or `Nullable<Bool>`), so a
+    /// typed comparison such as `left::col.eq(right::col)` is accepted while a
+    /// stray non-boolean expression (e.g. a bare integer column) is rejected at
+    /// compile time rather than rendering `ON <non-bool>`.
     pub fn on<Predicate>(
         self,
         predicate: Predicate,
     ) -> ClickHouseJoin<Left, Right, JoinOn<Predicate>>
     where
         Predicate: Expression,
+        Predicate::SqlType: BoolOrNullableBool,
     {
         ClickHouseJoin::new(self, JoinOn(predicate))
     }
@@ -473,6 +480,9 @@ where
 ///
 /// This is useful when selecting a qualified column through a join but loading
 /// into a struct field that expects the unqualified column name.
+///
+/// [`expr_as`] is the same constructor under a name that better reflects its
+/// generality — it aliases any expression, not just a column.
 pub fn source_column_as<C>(column: C, alias: impl Into<String>) -> AliasedColumn<C>
 where
     C: Expression,
@@ -481,6 +491,20 @@ where
         column,
         alias: alias.into(),
     }
+}
+
+/// Alias any expression as `expr AS alias` for result-shape validation.
+///
+/// This is the general form of [`source_column_as`]: the argument is any
+/// [`Expression`], so it equally aliases an aggregate or scalar function — for
+/// example `expr_as(any_value(events::format), "format")` — when ClickHouse
+/// result metadata should expose a specific struct-friendly field name.
+/// `source_column_as` remains as the column-oriented spelling of the same call.
+pub fn expr_as<C>(expr: C, alias: impl Into<String>) -> AliasedColumn<C>
+where
+    C: Expression,
+{
+    source_column_as(expr, alias)
 }
 
 /// Backwards-compatible name for [`source_column`].

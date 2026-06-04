@@ -27,25 +27,26 @@ use diesel_clickhouse::{
     ClickHouseTextExpressionMethods, Column, DataType, NestedField, OverDsl, Setting, TableEngine,
     TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table,
     analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter, array_map,
-    base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count_if, count_merge,
-    covar_pop, covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view,
-    create_table, cut_query_string, date_diff, dense_rank, domain, domain_without_www,
-    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
-    greatest, group_by_all, grouping_sets, hex, histogram, ilike, ipv4_num_to_string,
-    ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json,
-    join_column, json_extract_int, json_extract_int_path, json_extract_string_path, json_has,
-    json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, length, lower,
-    mann_whitney_u_test, map_apply, map_contains, map_filter, max_if, merge_tree, min_if,
-    multi_match_any, multi_match_any_index, mutation_assignment, partition_by, partition_expr,
-    position, prewhere, projection, quantile, quantile_deterministic, quantile_exact,
-    quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count, count_if,
+    count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
+    domain_without_www, expr_as, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
+    ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, is_null, is_valid_json, join_column, json_extract_int, json_extract_int_path,
+    json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
+    lambda2, least, length, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
+    max_if, merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment,
+    partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
-    simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable,
-    stddev_samp, substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
-    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
-    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
-    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
-    var_pop, var_pop_stable, vector_f32, with_fill, xx_hash64,
+    simple_json_extract_string, simple_json_has, sip_hash64, source_column, stddev_pop,
+    stddev_pop_stable, stddev_samp, substring, sum_merge, sum_state, summing_merge_tree,
+    to_date_time, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4,
+    to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null, top_k, top_level_domain,
+    try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path,
+    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, vector_f32, with_fill,
+    xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -735,6 +736,24 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 (6, "starter".to_string()),
             ]
         );
+
+        // Typed predicates over a custom join, executed end to end: a typed
+        // `.on(...)`, typed `.filter(...)` against columns from *both* sides of
+        // the join, and a native `count()` loaded into `u64` (ClickHouse's
+        // `count()` is `UInt64`). No `sql::<Bool>("...")` predicate anywhere.
+        let enterprise_successes: Vec<(String, u64)> = events
+            .clickhouse_join(tenants::table)
+            .all()
+            .inner()
+            .on(tenant_id.eq(tenants::tenant_id))
+            .select((source_column(tenants::plan), expr_as(count(), "n")))
+            .filter(tenants::plan.eq("enterprise"))
+            .filter(success.eq(true))
+            .group_by(join_column(tenants::plan))
+            .load(&mut conn)
+            .await?;
+        // Enterprise = tenant `acme` (events 1,2,3); successes among them: 1 and 3.
+        assert_eq!(enterprise_successes, vec![("enterprise".to_string(), 2)]);
 
         conn.batch_execute(
             r#"

@@ -17,8 +17,8 @@ Legend:
 | ✅ | ClickHouse backend marker and query builder | `to_sql(&query)?` | Backtick identifiers, `?` placeholders. |
 | ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Still useful for inspection and external-client execution. |
 | 🧪 | Execute rendered SQL via `clickhouse` crate | `client.query(&to_sql(&query)?).bind(...).fetch_all()` | Live Docker test validates this workflow. |
-| 🚧 🧪 | Diesel `AsyncConnection` adapter | `query.load::<T>(&mut conn).await?` | Native async HTTP-backed `AsyncClickHouseConnection` (a `diesel_async::AsyncConnection`) supports:<br>`establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute`<br>Server-side HTTP bind support with escaped-literal fallback where needed<br>`execute` returns the written-row count from `X-ClickHouse-Summary`<br>Primitive/text/nullable rows, arrays, maps, and tuple decoding<br>`Array<T>`→`Vec<T>`<br>`Map<K,V>`→`BTreeMap<K,V>`<br>`Tuple<...>`<br>String-form `Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant` decoding<br>Optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256<br>`sql_query`<br>`bb8`/`deadpool`/`mobc` pooling behind feature flags<br>Transactions are intentionally unsupported. |
-| ✅ 🧪 | Single-row insert | `insert_into(t).values((c.eq(v), ...)).execute(&mut conn).await` | Tuple and `#[derive(Insertable)]` (with `#[diesel(treat_none_as_default_value = false)]`)<br>single-row inserts render and execute; `execute` returns the written-row count (`1`). |
+| 🚧 🧪 | Diesel `AsyncConnection` adapter | `query.load::<T>(&mut conn).await?` | Native async HTTP-backed `AsyncClickHouseConnection` (a `diesel_async::AsyncConnection`) supports: `establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute` Server-side HTTP bind support with escaped-literal fallback where needed `execute` returns the written-row count from `X-ClickHouse-Summary` Primitive/text/nullable rows, arrays, maps, and tuple decoding `Array<T>`→`Vec<T>` `Map<K,V>`→`BTreeMap<K,V>` `Tuple<...>` String-form `Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant` decoding Optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256 `sql_query` `bb8`/`deadpool`/`mobc` pooling behind feature flags Transactions are intentionally unsupported. |
+| ✅ 🧪 | Single-row insert | `insert_into(t).values((c.eq(v), ...)).execute(&mut conn).await` | Tuple and `#[derive(Insertable)]` (with `#[diesel(treat_none_as_default_value = false)]`) single-row inserts render and execute; `execute` returns the written-row count (`1`). |
 | ✅ 🧪 | Multi-row batch insert | `conn.insert_batch("events", rows).await` | `AsyncClickHouseConnection::insert_batch` drives the `clickhouse` client's native RowBinary inserter—one columnar request per batch—and returns the number of rows sent. `rows` is an iterator of `#[derive(clickhouse::Row, serde::Serialize)]` structs. Live Docker test covers it. |
 | ⬜ | Multi-row batch insert via Diesel's DSL | `insert_into(t).values(vec![...])` | Not expressible: Diesel's `BatchInsert` requires the SQL `DEFAULT` keyword, and the escape-hatch `QueryFragment` impl is orphan-rule-reserved for Diesel's own backends. Use `insert_batch` (above) instead. |
 
@@ -40,9 +40,9 @@ Legend:
 | ✅ 🧪 | Vector embeddings | `Array<Float>`/`Array<Double>` columns, `vector_f32([..])`, `vector_f64([..])` |
 | ✅ 🧪 | Nullable values | Diesel's `Nullable<T>`, `.is_null()`, `.is_not_null()` |
 | ✅ 🧪 | Wider integers | `UInt128`, `UInt256`, `Int128`, `Int256`; DDL `DataType::{UInt128, UInt256, Int128, Int256}` |
-| ✅ 🧪 | Decimal families | `Decimal32<S>`<br>`Decimal64<S>`<br>`Decimal128<S>`<br>`Decimal256<S>`<br>DDL `DataType::decimal64(4)`<br>Optional `bigdecimal` feature for native Rust loading/binds |
-| ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>`<br>`Nested<...>`<br>`Enum8`, `Enum16`<br>DDL `DataType::tuple(...)`<br>`DataType::nested(...)`<br>`DataType::enum8(...)` |
-| ✅ 🧪 | Network / Geo / semi-structured types | `IPv4`, `IPv6`, `Point`, `Ring`, `Dynamic`, `Variant`<br>DDL `DataType::{Point, Ring}`<br>`DataType::dynamic_with_max_types(4)`<br>`DataType::variant(...)` |
+| ✅ 🧪 | Decimal families | `Decimal32<S>` `Decimal64<S>` `Decimal128<S>` `Decimal256<S>` DDL `DataType::decimal64(4)` Optional `bigdecimal` feature for native Rust loading/binds |
+| ✅ 🧪 | Tuple / Nested / Enum | `Tuple<...>` `Nested<...>` `Enum8`, `Enum16` DDL `DataType::tuple(...)` `DataType::nested(...)` `DataType::enum8(...)` |
+| ✅ 🧪 | Network / Geo / semi-structured types | `IPv4`, `IPv6`, `Point`, `Ring`, `Dynamic`, `Variant` DDL `DataType::{Point, Ring}` `DataType::dynamic_with_max_types(4)` `DataType::variant(...)` |
 
 ## SELECT source modifiers and clauses
 
@@ -86,10 +86,10 @@ Legend:
 
 | Status | Feature | Example DSL | Notes |
 | --- | --- | --- | --- |
-| ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression.<br>Use `clickhouse_join(...)` for executable ClickHouse joins. |
+| ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression. Use `clickhouse_join(...)` for executable ClickHouse joins. |
 | ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; select columns with `join_column(...)`. |
-| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type.<br>Replaces hand-written `sql::<...>(...)` lists and keeps typed reads.<br>Does not verify the column table is present in the join (orphan-rule limit). |
-| ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL` and<br>strictness modifiers (`ANY`, `ALL`, `ASOF`), plus join kinds. |
+| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type. Replaces hand-written `sql::<...>(...)` lists and keeps typed reads. Does not verify the column table is present in the join (orphan-rule limit). |
+| ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL` and strictness modifiers (`ANY`, `ALL`, `ASOF`), plus join kinds. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
 | ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`. |
 
@@ -101,21 +101,21 @@ Legend:
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
 | ✅ 🧪 | Regular comparison/logical operators | Diesel `.eq()`, `.gt()`, `.and()`, `.or()` built-ins. |
 | ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
-| ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()`<br>ClickHouse `.ilike()` / `.not_ilike()`<br>`like`, `like_escape`, `ilike`, `not_ilike`<br>`regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*` |
+| ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()` ClickHouse `.ilike()` / `.not_ilike()` `like`, `like_escape`, `ilike`, `not_ilike` `regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*` |
 
 ## Scalar functions
 
 | Status | Feature group | Implemented examples | Missing examples |
 | --- | --- | --- | --- |
-| ✅ 🧪 | Date/time conversion and bucketing | `to_date`<br>`to_date_time`<br>`to_date_time64`<br>`to_start_of_*`<br>`date_diff`<br>`date_trunc`<br>`to_year`<br>`to_month`<br>`to_hour` | intervals, timezone variants, `now*`, `parseDateTime*` |
+| ✅ 🧪 | Date/time conversion and bucketing | `to_date` `to_date_time` `to_date_time64` `to_start_of_*` `date_diff` `date_trunc` `to_year` `to_month` `to_hour` | intervals, timezone variants, `now*`, `parseDateTime*` |
 | ✅ 🧪 | Conditional/basic/numeric helpers | `if_`, `length`, `empty`, `not_empty`, `int_div`, `abs`, `round`, `floor`, `ceil`, `least`, `greatest` | `multiIf`, `coalesce`, `assumeNotNull` |
-| ✅ 🧪 | Arrays | `has`<br>`has_any`<br>`has_all`<br>`array_join`<br>`array_element`<br>`array_concat`<br>`array_distinct`<br>`array_map`<br>`array_filter`<br>`array_exists`<br>`array_all`<br>`array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
+| ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_all` `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
-| ✅ 🧪 | JSON | `json_extract_*`<br>`json_extract_*_path`<br>`json_extract_*_ci`<br>`json_value`<br>`json_query`<br>`json_exists`<br>`json_has`<br>`json_length`<br>`simple_json_extract_*`<br>`is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
-| ✅ 🧪 | Strings | `lower`<br>`upper`<br>`substring`<br>`position`<br>`replace_all`<br>`concat`<br>`regexp_match`<br>`like`<br>`ilike`<br>`multi_match_any`<br>`multi_match_any_index`<br>`multi_match_all_indices`<br>`multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
-| ✅ 🧪 | URL/IP/encoding/hash | `domain`<br>`domain_without_www`<br>`top_level_domain`<br>`url_path`<br>`base64_encode`<br>`hex`<br>`city_hash64`<br>`to_ipv4`<br>`is_ipv6_string` | More specialized variants can be added by demand. |
-| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))`<br>`cosine_distance`<br>`l1_distance`<br>`linf_distance`<br>`l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
-| ✅ 🧪 | Type conversion | `to_int*`<br>`to_uint*`<br>`to_float*`<br>`to_*_or_null`<br>`to_*_or_zero`<br>`to_string`<br>`cast::<ST, _>(...)`<br>`accurate_cast*`<br>`is_null`<br>`is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
+| ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
+| ✅ 🧪 | Strings | `lower` `upper` `substring` `position` `replace_all` `concat` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
+| ✅ 🧪 | URL/IP/encoding/hash | `domain` `domain_without_www` `top_level_domain` `url_path` `base64_encode` `hex` `city_hash64` `to_ipv4` `is_ipv6_string` | More specialized variants can be added by demand. |
+| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
+| ✅ 🧪 | Type conversion | `to_int*` `to_uint*` `to_float*` `to_*_or_null` `to_*_or_zero` `to_string` `cast::<ST, _>(...)` `accurate_cast*` `is_null` `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
 
 ## Vector search
 
@@ -125,9 +125,9 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | --- | --- | --- | --- |
 | ✅ 🧪 | Vector literals | `vector_f32([1.0, 0.0])`, `vector_f64([1.0, 2.0])` | Render as ClickHouse array literals. |
 | ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
-| ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536)`<br>`.distance(VectorDistanceFunction::CosineDistance)` | Render-tested; live fixture keeps exact search portable across server builds. |
+| ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536)` `.distance(VectorDistanceFunction::CosineDistance)` | Render-tested; live fixture keeps exact search portable across server builds. |
 | ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
-| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))`<br>`vector_f32_hex(sql("?"))`<br>`vector_f32_le_hex([...])` | Render-tested. ClickHouse docs recommend true binary client parameters;<br>the HTTP test client string-binds placeholders, so live coverage stays on exact vector literals. |
+| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render-tested. ClickHouse docs recommend true binary client parameters; the HTTP test client string-binds placeholders, so live coverage stays on exact vector literals. |
 
 ## Aggregate functions and combinators
 
@@ -137,11 +137,11 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Uniq aggregates | `uniq(x)`, `uniq_exact(x)`, `uniq_if(x, pred)`, `uniq_exact_if(x, pred)` |
 | ✅ 🧪 | Array aggregates | `group_array(x)`, `group_array_if(x, pred)` |
 | ✅ | Arg aggregates | `arg_max(arg, val)`, `arg_min(arg, val)` |
-| ✅ 🧪 | Parametric quantiles | `quantile(0.95, x)`<br>`quantile_exact(0.5, x)`<br>`quantile_tdigest(0.99, x)`<br>`quantile_timing(0.95, x)`<br>`quantile_deterministic(0.5, x, seed)`<br>`quantiles([0.25, 0.75], x)`<br>`quantiles_timing([...], x)` |
+| ✅ 🧪 | Parametric quantiles | `quantile(0.95, x)` `quantile_exact(0.5, x)` `quantile_tdigest(0.99, x)` `quantile_timing(0.95, x)` `quantile_deterministic(0.5, x, seed)` `quantiles([0.25, 0.75], x)` `quantiles_timing([...], x)` |
 | ✅ 🧪 | `topK` / histograms | `top_k(10, x)`, `histogram(20, x)` |
 | ✅ | Any-value aggregates | `any_value(x)`, `any_last(x)` |
-| ✅ 🧪 | Statistical aggregates | `corr(x, y)`<br>`covar_pop(x, y)`<br>`covar_samp(x, y)`<br>`covar_pop_stable(x, y)`<br>`covar_samp_stable(x, y)`<br>`stddev_pop(x)`<br>`stddev_samp(x)`<br>`var_pop(x)`<br>`var_samp(x)`<br>`analysis_of_variance(x, group)`<br>`mann_whitney_u_test(x, sample)`<br>`approx_top_sum(n, value, weight)` | Stable variants included for covariance, stddev, and variance. |
-| ✅ 🧪 | General aggregate combinator builder | `aggregate::<Double>("avg").arg(x).or_null().if_(pred)`<br>`aggregate::<BigInt>("count").no_args().if_(pred)`<br>`.distinct()`<br>`.state()`<br>`.merge_state()`<br>`.combinator("ForEach")` | Provides a typed escape hatch for ClickHouse aggregate suffix combinators.<br>Preserves one-off helpers for common cases. |
+| ✅ 🧪 | Statistical aggregates | `corr(x, y)` `covar_pop(x, y)` `covar_samp(x, y)` `covar_pop_stable(x, y)` `covar_samp_stable(x, y)` `stddev_pop(x)` `stddev_samp(x)` `var_pop(x)` `var_samp(x)` `analysis_of_variance(x, group)` `mann_whitney_u_test(x, sample)` `approx_top_sum(n, value, weight)` | Stable variants included for covariance, stddev, and variance. |
+| ✅ 🧪 | General aggregate combinator builder | `aggregate::<Double>("avg").arg(x).or_null().if_(pred)` `aggregate::<BigInt>("count").no_args().if_(pred)` `.distinct()` `.state()` `.merge_state()` `.combinator("ForEach")` | Provides a typed escape hatch for ClickHouse aggregate suffix combinators. Preserves one-off helpers for common cases. |
 | ✅ 🧪 | State/merge combinators | `sum_state(x)`, `sum_merge(state)`, `count_state()`, `uniq_exact_merge(state)`, `finalize_aggregation(state)` | Includes `AggregateFunction<T>` type marker and DDL type rendering. |
 | ✅ 🧪 | Approx/statistical long tail | `stddev*`, `var*`, `analysis_of_variance`, `mann_whitney_u_test`, `approx_top_sum`, `approx_top_sum_with_reserved` | Additional specialized aggregate families can be added by demand. |
 
@@ -150,24 +150,24 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | Status | Feature | Example DSL |
 | --- | --- | --- |
 | ✅ 🧪 | Ranking functions | `row_number().over_ch(...)`, `rank().over_window("w")`, `dense_rank().over_ch(...)` |
-| ✅ 🧪 | Offset functions | `lag(expr).over_ch(...)`<br>`lead(expr).over_ch(...)`<br>`lag_in_frame(expr, offset, default).over_ch(...)`<br>`lead_in_frame(...)` |
+| ✅ 🧪 | Offset functions | `lag(expr).over_ch(...)` `lead(expr).over_ch(...)` `lag_in_frame(expr, offset, default).over_ch(...)` `lead_in_frame(...)` |
 | ✅ | Value window functions | `first_value(expr).over_ch(...)`, `last_value(expr).over_ch(...)` |
 | ✅ 🧪 | Window `.over_ch(...)` / named `.over_window(...)` | `function.over_ch(partition_by(...).order_by(...))` |
 | ✅ 🧪 | Named `WINDOW` clause | `query.window("w", partition_by(...).order_by(...))` |
-| ✅ 🧪 | Frame variants beyond current row | `.rows_between_preceding_and_following(1, 1)`<br>`.range_between_preceding_and_current_row(1)`<br>`.rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2))` |
+| ✅ 🧪 | Frame variants beyond current row | `.rows_between_preceding_and_following(1, 1)` `.range_between_preceding_and_current_row(1)` `.rows_between(WindowFrameBound::CurrentRow, WindowFrameBound::following(2))` |
 
 ## DDL and table engines
 
 | Status | Feature | Example DSL |
 | --- | --- | --- |
 | ✅ 🧪 | `CREATE TABLE` builder | `create_table("events").column(...).engine(...)` |
-| ✅ 🧪 | MergeTree family engines | `merge_tree()`<br>`replacing_merge_tree()`<br>`summing_merge_tree()`<br>`aggregating_merge_tree()`<br>`collapsing_merge_tree("sign")`<br>`versioned_collapsing_merge_tree("sign", "version")` |
+| ✅ 🧪 | MergeTree family engines | `merge_tree()` `replacing_merge_tree()` `summing_merge_tree()` `aggregating_merge_tree()` `collapsing_merge_tree("sign")` `versioned_collapsing_merge_tree("sign", "version")` |
 | ✅ 🧪 | Engine modifiers | `.partition_by(...)`, `.primary_key(...)`, `.order_by(...)`, `.sample_by(...)`, `.ttl(...)`, `.setting(...)` |
 | ✅ 🧪 | Special engines | `TableEngine::memory()`, `TableEngine::null()`, `distributed(...).sharding_key(...)`, `buffer(...)` |
 | ✅ 🧪 | Column codecs/default/materialized/alias | `Column::new(...).default_expr(...)`, `.materialized_expr(...)`, `.alias_expr(...)`, `.codec(...)` |
-| ✅ 🧪 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)`<br>`TableIndex::custom(...)`<br>`projection("by_tenant", "SELECT ...")`<br>`alter_table(...).add_projection(...)` |
+| ✅ 🧪 | Secondary indexes/projections | `vector_similarity_index("idx", "embedding", dims)` `TableIndex::custom(...)` `projection("by_tenant", "SELECT ...")` `alter_table(...).add_projection(...)` |
 | ✅ 🧪 | Materialized views | `create_materialized_view("events_mv").to("target").as_select(query)` |
-| ✅ 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)`<br>`.rename_column(...)`<br>`.add_index(...)`<br>`.materialize_index(...)`<br>`.add_projection(...)`<br>`.materialize_projection(...)`<br>`.update(...)`<br>`.delete_where(...)`<br>`.drop_partition(...)`<br>`.detach_partition(...)`<br>`.attach_partition(...)`<br>`.freeze_partition_with_name(...)` | Column/index/projection lifecycle and `MODIFY TTL`.<br>Mutations and common partition operations are implemented.<br>Advanced replicated-only partition moves/fetches can be added by demand. |
+| ✅ 🧪 | `ALTER TABLE` helpers | `alter_table("events").add_column(...)` `.rename_column(...)` `.add_index(...)` `.materialize_index(...)` `.add_projection(...)` `.materialize_projection(...)` `.update(...)` `.delete_where(...)` `.drop_partition(...)` `.detach_partition(...)` `.attach_partition(...)` `.freeze_partition_with_name(...)` | Column/index/projection lifecycle and `MODIFY TTL`. Mutations and common partition operations are implemented. Advanced replicated-only partition moves/fetches can be added by demand. |
 
 ## Test policy
 

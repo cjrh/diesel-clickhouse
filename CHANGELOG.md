@@ -10,6 +10,14 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- `count()` aggregate helper returning ClickHouse's native `UInt64`, so it loads into `u64` directly — a typed replacement for `aggregate::<UInt64>("count").no_args()`. Diesel's built-in `count_star()` (typed `BigInt`) still works where you want `i64`.
+- `expr_as(expr, "alias")`, the general form of `source_column_as(...)`: it aliases any expression (e.g. an aggregate) as `expr AS alias` for struct-friendly result metadata. `source_column_as(...)` remains as the column-oriented spelling.
+- Usage-guide section "Predicates: prefer typed expressions" plus render, compile, and live tests covering typed `.filter(...)` over a `ClickHouseJoin` and typed multi-column `.on(...)`.
+
+### Changed
+- `ClickHouseJoinBuilder::on(...)` now requires a boolean predicate (`Predicate::SqlType: BoolOrNullableBool`). Typed comparisons such as `left::col.eq(right::col)` are unaffected; a stray non-boolean expression is now a compile error instead of rendering `ON <non-bool>`.
+
 ## [0.7.0] — 2026-06-04
 
 ### Added

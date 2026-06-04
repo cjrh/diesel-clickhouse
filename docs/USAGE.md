@@ -30,6 +30,8 @@ let rows: Vec<(String, u64, f64)> = Client::default()
 
 Rendered SQL uses backtick identifiers and `?` bind placeholders. Bind values are supplied to the external ClickHouse client in the same order Diesel rendered them.
 
+> **Bind values do not travel with `to_sql`.** `to_sql(&query)` renders only the SQL string; the Diesel bind values stay behind. When you execute that string through an external `clickhouse::Client`, *you* re-supply every value with `.bind(...)` in render order, so a reordered `filter`/`select` or a changed type silently drifts out of sync with your `.bind(...)` calls. `to_sql_with_metadata` (see below) lets a test assert the placeholder count matches. To remove the hand-binding step entirely, execute through `AsyncClickHouseConnection`, which carries the Diesel-collected bind values through for you.
+
 ## Diesel `AsyncConnection`
 
 `AsyncClickHouseConnection` is a native async Diesel connection (a [`diesel_async::AsyncConnection`]) backed by ClickHouse's HTTP interface. Drive queries with `diesel_async`'s `RunQueryDsl` and `.await`:
@@ -224,6 +226,36 @@ let rows: Vec<(i64, String)> = events::table
 Why a wrapper instead of bare columns: Diesel's `table!` macro only implements `SelectableExpression` for a column against the table itself and Diesel's *own* built-in join nodes. Rust's orphan rule prevents a third-party backend from adding that impl for arbitrary foreign columns over a custom source, so the column is wrapped in a local type that carries the same SQL type. The trade-off is that `source_column` does not verify the column's table actually appears in the source — that one check is what Diesel's built-in joins provide and what the orphan rule withholds here.
 
 Diesel's built-in `.inner_join(...).on(...)` is type-safe but **not executable** on ClickHouse: Diesel emits a parenthesized join source (`FROM (a INNER JOIN b ON ...)`), which ClickHouse parses as a subquery (`FROM (SELECT * FROM a JOIN b ...)`) and then rejects the outer qualified column references. The parentheses come from Diesel's backend-generic `Grouped` wrapper, which cannot be overridden per backend. Use `clickhouse_join(...)` with `source_column(...)` for executable joins; treat built-in join rendering as inspection-only.
+
+## Predicates: prefer typed expressions
+
+Write `WHERE`/`ON`/`HAVING` constraints as typed Diesel expressions that refer to columns directly, **not** as `sql::<Bool>("my_column > 2")` strings. Typed predicates are checked against your `table!` schema: the column path must exist, the comparison must type-check, and a renamed column or wrong literal type is a compile error instead of a runtime ClickHouse error.
+
+```rust,ignore
+use diesel_clickhouse::ClickHouseJoinDsl;
+
+// Typed — `tenant_id`/`status`/`success` must exist and the literals must match.
+let rows: Vec<(i64, String)> = events::table
+    .clickhouse_join(tenants::table)
+    .any()
+    .inner()
+    .on(events::tenant_id.eq(tenants::tenant_id)) // ON requires a boolean predicate
+    .select((source_column(events::id), source_column(tenants::plan)))
+    .filter(events::tenant_id.eq("acme"))         // typed columns from either side
+    .filter(tenants::plan.eq("enterprise"))
+    .load(&mut conn)?;
+```
+
+Two things to know about predicates on the ClickHouse-specific sources:
+
+- **`.on(...)` requires a boolean predicate** (`Bool` or `Nullable<Bool>`). `events::col.eq(other::col)` is accepted; a stray non-boolean expression is rejected at compile time rather than rendering `ON <non-bool>`.
+- **`.filter(...)` is available after `.select(...)`.** Diesel does not implement `FilterDsl` for the custom source wrappers themselves (`Final`, `ClickHouseJoin`, `Prewhere`, `Sample`, `ArrayJoin`), so call `.select(...)` first — the resulting statement filters by typed columns normally. (`final_table(t).filter(...)` before a `.select(...)` does not compile.)
+
+Note the asymmetry with projection: typed **predicates keep** Diesel's full safety, including the check that the column's table appears in the source. Typed **projections** through `source_column(...)` deliberately **trade away** that appearance check (Rust's orphan rule prevents a third-party backend from reproducing it for foreign columns over a custom source — see the Joins section). So reach for typed predicates freely; `source_column` is the narrower escape hatch.
+
+Some constraints genuinely need raw SQL — e.g. an `ASOF` `.on(...)` that mixes equality and inequality across columns ClickHouse evaluates positionally. Use `sql::<Bool>("...")` there deliberately, not as the default.
+
+For aggregates in the select/having position, prefer the typed helpers over `aggregate::<...>("name")` strings where one exists — for example `count()` (typed `UInt64`, ClickHouse's native row-count type) instead of `aggregate::<UInt64>("count").no_args()`, and `expr_as(expr, "alias")` to name any expression for struct-friendly result metadata.
 
 ## Custom source wrappers
 

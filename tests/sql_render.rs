@@ -5,17 +5,16 @@ use diesel_clickhouse::{
     VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
     accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree,
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
-    approx_top_sum_with_reserved,
-    array_all, array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state,
-    avg_state, base64_decode, base64_encode, buffer, cast, ceil, city_hash64,
-    collapsing_merge_tree, concat, corr, cosine_distance, count_if, count_merge, count_merge_state,
-    count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
-    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank,
-    distributed, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
-    first_significant_subdomain, floor, greatest, group_array_merge, group_array_state,
-    group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike, ilike_escape,
-    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
-    is_valid_json, join_column, json_exists, json_extract_int, json_extract_int_ci,
+    approx_top_sum_with_reserved, array_all, array_count, array_exists, array_filter, array_map,
+    avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, cast, ceil,
+    city_hash64, collapsing_merge_tree, concat, corr, cosine_distance, count, count_if,
+    count_merge, count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp,
+    covar_samp_stable, create_materialized_view, create_table, cube, cut_query_string, date_diff,
+    dense_rank, distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
+    finalize_aggregation, first_significant_subdomain, floor, greatest, group_array_merge,
+    group_array_state, group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike,
+    ilike_escape, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, is_valid_json, join_column, json_exists, json_extract_int, json_extract_int_ci,
     json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
     json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
     json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
@@ -299,7 +298,10 @@ fn scanner_handles_doubled_and_escaped_quotes() {
 fn scanner_dedupes_named_parameters_in_first_seen_order() {
     let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int}");
 
-    assert_eq!(meta.named_parameters, vec!["b".to_string(), "a".to_string()]);
+    assert_eq!(
+        meta.named_parameters,
+        vec!["b".to_string(), "a".to_string()]
+    );
 }
 
 #[test]
@@ -1044,6 +1046,62 @@ fn renders_clickhouse_join_with_typed_columns() {
     {
     }
     assert_sql_type(&any_join);
+}
+
+#[test]
+fn renders_typed_predicates_on_custom_sources() {
+    use self::events::dsl::*;
+
+    // Typed `.filter(...)` predicates over a custom `ClickHouseJoin` source —
+    // real, type-checked columns rather than `sql::<Bool>("...")`. Diesel does
+    // not implement `FilterDsl` for the join source itself, so `.select(...)`
+    // comes first; the resulting statement then filters by typed columns from
+    // either side of the join.
+    let filtered_join = events
+        .clickhouse_join(tenants::table)
+        .any()
+        .inner()
+        .on(tenant_id.eq(tenants::tenant_id))
+        .select((source_column(id), source_column(tenants::plan)))
+        .filter(tenant_id.eq("acme"))
+        .filter(tenants::plan.eq("enterprise"));
+    assert_eq!(
+        to_sql(&filtered_join).unwrap(),
+        "SELECT `events`.`id`, `tenants`.`plan` FROM `events` ANY INNER JOIN `tenants` \
+         ON (`events`.`tenant_id` = `tenants`.`tenant_id`) \
+         WHERE ((`events`.`tenant_id` = ?) AND (`tenants`.`plan` = ?))"
+    );
+
+    // Native `count()` renders ClickHouse's `count()` and is typed `UInt64`, so
+    // it loads into a `u64` (unlike Diesel's `count_star()`, which is `BigInt`).
+    let count_query = events.group_by(tenant_id).select((tenant_id, count()));
+    assert_eq!(
+        to_sql(&count_query).unwrap(),
+        "SELECT `events`.`tenant_id`, count() FROM `events` GROUP BY `events`.`tenant_id`"
+    );
+
+    fn assert_count_is_uint64<Q>(_: &Q)
+    where
+        Q: diesel::query_builder::Query<
+                SqlType = (
+                    diesel::sql_types::Text,
+                    diesel_clickhouse::sql_types::UInt64,
+                ),
+            >,
+    {
+    }
+    assert_count_is_uint64(&count_query);
+
+    // `expr_as` aliases any expression (here an aggregate), so it loads into a
+    // named/struct-friendly field — the general form of `source_column_as`.
+    let aliased = events
+        .group_by(tenant_id)
+        .select((source_column_as(tenant_id, "tenant"), expr_as(count(), "n")));
+    assert_eq!(
+        to_sql(&aliased).unwrap(),
+        "SELECT `events`.`tenant_id` AS `tenant`, count() AS `n` FROM `events` \
+         GROUP BY `events`.`tenant_id`"
+    );
 }
 
 #[test]
