@@ -22,8 +22,8 @@ use diesel::prelude::*;
 // async connection's `.load`/`.first` resolve unambiguously.
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
-    ClickHouseConnectionOptions, ClickHouseJoinDsl, clickhouse, count, count_if, expr_as,
-    final_table, has, source_column, to_sql, to_sql_with_metadata,
+    ClickHouseConnectionOptions, ClickHouseJoinDsl, bind, clickhouse, count, count_if, expr_as,
+    final_table, has, source_column, to_sql, to_sql_with_metadata, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -125,6 +125,126 @@ async fn main() -> Result<()> {
             .order(events::id.asc()),
     )?);
     doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: bind() against an unsigned column ------------------------
+    doc.recipe(
+        "Bind a Rust value to a ClickHouse-only column type",
+        "`cookbook_events.id` is a `UInt64`. Diesel cannot bind a bare `u64` \
+         against ClickHouse's unsigned types — its blanket `AsExpression` impl \
+         makes a hand-written one a coherence conflict in every crate — so \
+         `id.gt(after)` does not compile and you would otherwise reach for the \
+         untyped `sql::<UInt64>(\"?\")`. `bind(value)` wraps the value as a typed \
+         parameter instead: the target SQL type is inferred from the column, the \
+         value is type-checked against it, and it renders as a real `?` bind.",
+    );
+    doc.sql(R_BIND_SQL);
+    doc.diesel(R_BIND_RUST);
+    let after: u64 = 2;
+    let through: u64 = 5;
+    let orm: Vec<(u64, String)> = events::table
+        .filter(events::id.gt(bind(after)))
+        .filter(events::id.le(bind(through)))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, String)> = client.query(R_BIND_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &events::table
+            .filter(events::id.gt(bind(after)))
+            .filter(events::id.le(bind(through)))
+            .select((events::id, events::tenant_id))
+            .order(events::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: optional filter with when() ------------------------------
+    doc.recipe(
+        "Optional filters with `when(...)`",
+        "On most backends an optional filter is added by boxing the query, but \
+         the ClickHouse backend does not support `.into_boxed()`. `when(enabled, \
+         predicate)` covers the gap: when `enabled` is true the predicate renders \
+         normally; when it is false the node renders the always-true constant `1`, \
+         so the filter contributes nothing and binds nothing. This replaces the \
+         `(? = '' OR col = ?)` sentinel trick — the value is referenced once and \
+         stays fully typed. (`when` renders different SQL per branch; if you need \
+         the SQL *text* to stay identical across calls — for ClickHouse's query \
+         cache or a parameterized view — see the named-parameter recipe next.)",
+    );
+    doc.sql(R_WHEN_SQL);
+    doc.diesel(R_WHEN_RUST);
+    // A real filter value arrives at runtime; an empty value disables the filter.
+    let tenant = env::var("COOKBOOK_TENANT").unwrap_or_else(|_| "acme".to_owned());
+    let tenant = tenant.as_str();
+    let orm: Vec<(u64, String)> = events::table
+        .filter(when(!tenant.is_empty(), events::tenant_id.eq(tenant)))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, String)> = client.query(R_WHEN_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &events::table
+            .filter(when(!tenant.is_empty(), events::tenant_id.eq(tenant)))
+            .select((events::id, events::tenant_id))
+            .order(events::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+    doc.paragraph(
+        "With an empty `tenant` the predicate disables itself — the same query \
+         renders the filter as the constant `1`, so every row matches and no \
+         value is bound:",
+    );
+    doc.code(
+        "sql",
+        &to_sql(
+            &events::table
+                .filter(when(false, events::tenant_id.eq("")))
+                .select((events::id, events::tenant_id))
+                .order(events::id.asc()),
+        )?,
+    );
+
+    // ----- Recipe: named parameters for stable SQL --------------------------
+    doc.recipe(
+        "Stable SQL text with ClickHouse named parameters",
+        "When the SQL string must stay byte-for-byte identical across calls — so \
+         ClickHouse's query cache hits, or a parameterized view sees one query — \
+         use a ClickHouse named parameter (`{name:Type}`). It can be referenced \
+         many times in the text but is bound once with the client's `.param(...)`, \
+         which makes it a tidy fit for the optional-filter sentinel: an empty value \
+         leaves `'' = ''` true and disables the filter, a non-empty value enforces \
+         it, and the SQL text never changes. The `{name:Type}` string is raw, so \
+         its contents are unchecked; `to_sql_with_metadata(...).named_parameters()` \
+         reports the names so a test can assert your `.param(...)` calls line up.",
+    );
+    doc.sql(R_NAMED_SQL);
+    doc.diesel(R_NAMED_RUST);
+    let named_query = events::table
+        .select((events::id, events::tenant_id))
+        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "({tenant:String} = '' OR tenant_id = {tenant:String})",
+        ))
+        .order(events::id.asc());
+    let rendered = to_sql_with_metadata(&named_query)?;
+    assert_eq!(rendered.named_parameters(), &["tenant"]);
+    doc.rendered(&rendered.sql);
+    // One stable SQL string, bound by name. An empty value disables the filter.
+    let enabled: Vec<(u64, String)> = client
+        .query(&rendered.sql)
+        .param("tenant", "acme")
+        .fetch_all()
+        .await?;
+    let disabled: Vec<(u64, String)> = client
+        .query(&rendered.sql)
+        .param("tenant", "")
+        .fetch_all()
+        .await?;
+    doc.text_output(&format!(
+        "named parameters: {:?}\n\ntenant = \"acme\" -> {enabled:#?}\n\ntenant = \"\" matches all {} rows",
+        rendered.named_parameters(),
+        disabled.len(),
+    ));
 
     // ----- Recipe: FINAL + typed projection ---------------------------------
     doc.recipe(
@@ -391,6 +511,12 @@ fn intro(doc: &mut CookbookDoc) {
             ["any(col)", "any_value(col)"],
             ["quantile(0.95)(col)", "quantile(0.95, col)"],
             ["expr AS name", "expr_as(expr, \"name\")"],
+            ["t.unsigned_col > 42", "t::unsigned_col.gt(bind(42u64))"],
+            ["optional WHERE col = v", "when(flag, t::col.eq(v))"],
+            [
+                "{name:Type} (stable SQL text)",
+                "sql::<T>(\"{name:Type}\") + .param(..)",
+            ],
             ["bare t.col from a custom source", "source_column(t::col)"],
             ["FORMAT JSONEachRow", ".format(Format::JsonEachRow)"],
         ],
@@ -542,6 +668,55 @@ const R_FILTER_RUST: &str = r#"let rows: Vec<(u64, String)> = events::table
     .select((events::id, events::tenant_id))
     .order(events::id.asc())
     .load(&mut conn).await?;"#;
+
+const R_BIND_SQL: &str =
+    "SELECT id, tenant_id FROM cookbook_events WHERE id > 2 AND id <= 5 ORDER BY id";
+
+const R_BIND_RUST: &str = r#"use diesel_clickhouse::bind;
+
+let after: u64 = 2;
+let through: u64 = 5;
+let rows: Vec<(u64, String)> = events::table
+    // `events::id` is a `UInt64`; `bind` types each value against it.
+    .filter(events::id.gt(bind(after)))
+    .filter(events::id.le(bind(through)))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_WHEN_SQL: &str =
+    "SELECT id, tenant_id FROM cookbook_events WHERE tenant_id = 'acme' ORDER BY id";
+
+const R_WHEN_RUST: &str = r#"use diesel_clickhouse::when;
+
+let tenant = "acme"; // an empty value disables the filter
+let rows: Vec<(u64, String)> = events::table
+    .filter(when(!tenant.is_empty(), events::tenant_id.eq(tenant)))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_NAMED_SQL: &str = "SELECT id, tenant_id FROM cookbook_events \
+WHERE ({tenant:String} = '' OR tenant_id = {tenant:String}) ORDER BY id";
+
+const R_NAMED_RUST: &str = r#"use diesel::dsl::sql;
+use diesel::sql_types::Bool;
+use diesel_clickhouse::to_sql_with_metadata;
+
+// `{tenant:String}` appears twice in the text but is bound once, so the SQL
+// string is identical for every tenant (and "" disables the filter).
+let query = events::table
+    .select((events::id, events::tenant_id))
+    .filter(sql::<Bool>("({tenant:String} = '' OR tenant_id = {tenant:String})"))
+    .order(events::id.asc());
+
+let rendered = to_sql_with_metadata(&query)?;
+assert_eq!(rendered.named_parameters(), &["tenant"]);
+
+let rows: Vec<(u64, String)> = client
+    .query(&rendered.sql)
+    .param("tenant", "acme") // bind once by name; "" matches all rows
+    .fetch_all().await?;"#;
 
 const R_FINAL_SQL: &str = "SELECT id, status FROM cookbook_latest FINAL ORDER BY id";
 
