@@ -205,25 +205,54 @@ let sql = diesel_clickhouse::to_sql(&ddl)?;
 
 ## Joins
 
-Use `clickhouse_join(...)` for executable ClickHouse join SQL, especially for ClickHouse-specific grammar (`GLOBAL`, `ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`). Wrap projected columns with `join_column(...)` so the select list is type-checked instead of a hand-written string:
+Use `clickhouse_join(...)` for executable ClickHouse join SQL, especially for ClickHouse-specific grammar (`GLOBAL`, `ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`). Wrap projected columns with `source_column(...)` (or the backwards-compatible `join_column(...)` name) so the select list is type-checked instead of a hand-written string:
 
 ```rust,ignore
-use diesel_clickhouse::{join_column, ClickHouseJoinDsl};
+use diesel_clickhouse::{source_column, ClickHouseJoinDsl};
 
 let rows: Vec<(i64, String)> = events::table
     .clickhouse_join(tenants::table)
     .any()
     .inner()
     .on(events::tenant_id.eq(tenants::tenant_id))
-    .select((join_column(events::id), join_column(tenants::plan)))
+    .select((source_column(events::id), source_column(tenants::plan)))
     .load(&mut conn)?;
 ```
 
-`join_column(events::id)` keeps the column's SQL type, so the query loads into a typed `(i64, String)` and renders the same `` `events`.`id` `` qualified SQL — replacing the old `sql::<(BigInt, Text)>("`events`.`id`, ...")` escape hatch, which discarded both the names and the types. The `ON`/`USING` constraint and any `filter`/`order` predicates already use real, type-checked columns.
+`source_column(events::id)` keeps the column's SQL type, so the query loads into a typed `(i64, String)` and renders the same `` `events`.`id` `` qualified SQL — replacing the old `sql::<(BigInt, Text)>("`events`.`id`, ...")` escape hatch, which discarded both the names and the types. Use `source_column_as(column, "alias")` when ClickHouse result metadata should expose an unqualified/struct-friendly field name.
 
-Why a wrapper instead of bare columns: Diesel's `table!` macro only implements `SelectableExpression` for a column against Diesel's *own* built-in join nodes. Rust's orphan rule prevents a third-party backend from adding that impl for arbitrary foreign columns over a custom join source, so the column is wrapped in a local type that carries the same SQL type. The trade-off is that `join_column` does not verify the column's table actually appears in the join — that one check is what Diesel's built-in joins provide and what the orphan rule withholds here.
+Why a wrapper instead of bare columns: Diesel's `table!` macro only implements `SelectableExpression` for a column against the table itself and Diesel's *own* built-in join nodes. Rust's orphan rule prevents a third-party backend from adding that impl for arbitrary foreign columns over a custom source, so the column is wrapped in a local type that carries the same SQL type. The trade-off is that `source_column` does not verify the column's table actually appears in the source — that one check is what Diesel's built-in joins provide and what the orphan rule withholds here.
 
-Diesel's built-in `.inner_join(...).on(...)` is type-safe but **not executable** on ClickHouse: Diesel emits a parenthesized join source (`FROM (a INNER JOIN b ON ...)`), which ClickHouse parses as a subquery (`FROM (SELECT * FROM a JOIN b ...)`) and then rejects the outer qualified column references. The parentheses come from Diesel's backend-generic `Grouped` wrapper, which cannot be overridden per backend. Use `clickhouse_join(...)` with `join_column(...)` for executable joins; treat built-in join rendering as inspection-only.
+Diesel's built-in `.inner_join(...).on(...)` is type-safe but **not executable** on ClickHouse: Diesel emits a parenthesized join source (`FROM (a INNER JOIN b ON ...)`), which ClickHouse parses as a subquery (`FROM (SELECT * FROM a JOIN b ...)`) and then rejects the outer qualified column references. The parentheses come from Diesel's backend-generic `Grouped` wrapper, which cannot be overridden per backend. Use `clickhouse_join(...)` with `source_column(...)` for executable joins; treat built-in join rendering as inspection-only.
+
+## Custom source wrappers
+
+ClickHouse source modifiers such as `FINAL`, `SAMPLE`, `PREWHERE`, and `ARRAY JOIN` are available as query-source wrappers. Project typed columns through them with `source_column(...)`:
+
+```rust,ignore
+use diesel_clickhouse::{final_table, prewhere, sample, source_column, source_column_as};
+
+let source = prewhere(sample(final_table(events::table), 0.1), events::tenant_id.eq("acme"));
+let rows: Vec<(i64, String)> = source
+    .select((source_column(events::id), source_column_as(events::tenant_id, "tenant")))
+    .filter(events::success.eq(true))
+    .load(&mut conn)
+    .await?;
+```
+
+Use `alias_source(source, "e")` or `.alias_source("e")` when ClickHouse-specific SQL fragments need a short source alias; identifiers are validated and rendered as backtick-quoted aliases. Apply the alias to the table-like source before `prewhere(...)` or `array_join(...)` wrappers so ClickHouse sees `FROM table FINAL AS e PREWHERE ...`, not an alias after those clauses.
+
+## Rendered SQL metadata
+
+`to_sql_with_metadata(&query)` returns the same SQL string as `to_sql(&query)` plus a lightweight scan of placeholders outside quoted strings/comments:
+
+```rust,ignore
+let rendered = diesel_clickhouse::to_sql_with_metadata(&query)?;
+assert_eq!(rendered.positional_bind_count(), 2);
+assert_eq!(rendered.named_parameters(), &["tenant_id"]);
+```
+
+This helper is useful when rendering a Diesel AST with `to_sql` and then executing it through `diesel_clickhouse::clickhouse::Client`: tests can assert that every rendered positional placeholder has a matching `.bind(...)` call and every ClickHouse HTTP parameter (`{name:Type}`) has a matching `.param(...)` call.
 
 ## Render-only and client-dependent areas
 

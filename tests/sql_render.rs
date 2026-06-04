@@ -4,38 +4,40 @@ use diesel_clickhouse::{
     Format, NestedField, OutfileCompression, OverDsl, Setting, TableEngine, TableIndex,
     VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
     accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree,
-    alter_table, analysis_of_variance, approx_top_sum, approx_top_sum_with_reserved, array_all,
-    array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state, avg_state,
-    base64_decode, base64_encode, buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat,
-    corr, cosine_distance, count_if, count_merge, count_merge_state, count_state, covar_pop,
-    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table, cube,
-    cut_query_string, date_diff, dense_rank, distributed, domain, domain_without_www,
-    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
-    greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
-    histogram, if_, ilike, ilike_escape, ipv4_num_to_string, ipv4_string_to_num,
-    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, join_column, json_exists,
-    json_extract_int, json_extract_int_ci, json_extract_int_ci_path, json_extract_int_path,
-    json_extract_raw_ci, json_extract_raw_path, json_extract_string_ci, json_extract_string_path,
-    json_has, json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm,
-    lag_in_frame, lambda, lambda2, least, length, like, like_escape, linf_distance, linf_norm,
-    lower, mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
-    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
-    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
-    multi_match_any_index, mutation_assignment, not_ilike, not_ilike_escape, not_like,
-    not_like_escape, partition_by, partition_expr, partition_id, position, prewhere, projection,
-    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
-    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
-    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
-    sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable, substring,
-    sum_merge, sum_merge_state, sum_state, summing_merge_tree_with, to_bool, to_date_time,
-    to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64,
-    to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_start_of_hour, to_string, to_uint32,
-    to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, top_k, top_level_domain,
-    try_base64_decode, unhex, uniq_exact_merge, uniq_exact_state, uniq_merge, uniq_state, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
-    var_samp, var_samp_stable, vector_f32, vector_f32_binary, vector_f32_hex, vector_f32_le_hex,
-    vector_f64, vector_f64_hex, vector_similarity_index, versioned_collapsing_merge_tree,
-    with_fill, with_totals, xx_hash64,
+    alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
+    approx_top_sum_with_reserved,
+    array_all, array_count, array_exists, array_filter, array_map, avg_merge, avg_merge_state,
+    avg_state, base64_decode, base64_encode, buffer, cast, ceil, city_hash64,
+    collapsing_merge_tree, concat, corr, cosine_distance, count_if, count_merge, count_merge_state,
+    count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank,
+    distributed, domain, domain_without_www, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_array_merge, group_array_state,
+    group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike, ilike_escape,
+    ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string,
+    is_valid_json, join_column, json_exists, json_extract_int, json_extract_int_ci,
+    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
+    json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
+    json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
+    length, like, like_escape, linf_distance, linf_norm, lower, mann_whitney_u_test, map_apply,
+    map_contains, map_filter, map_from_arrays, map_keys, map_values, max_merge, max_state,
+    min_merge, min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any,
+    multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any, multi_match_any_index,
+    mutation_assignment, not_ilike, not_ilike_escape, not_like, not_like_escape, partition_by,
+    partition_expr, partition_id, position, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample, sample_offset,
+    simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64,
+    source_column, source_column_as, stddev_pop, stddev_pop_stable, stddev_samp,
+    stddev_samp_stable, substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with,
+    to_bool, to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null,
+    to_int64, to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_sql_with_metadata,
+    to_start_of_hour, to_string, to_uint32, to_uint64, to_uint64_or_null, to_uint64_or_zero,
+    to_uint128, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_merge,
+    uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full,
+    url_protocol, url_query_string, var_pop, var_pop_stable, var_samp, var_samp_stable, vector_f32,
+    vector_f32_binary, vector_f32_hex, vector_f32_le_hex, vector_f64, vector_f64_hex,
+    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -207,16 +209,29 @@ fn renders_source_modifiers_before_where() {
 
     let source = prewhere(sample(final_table(events), 0.1), tenant_id.eq("acme"));
     let query = source
-        .select(diesel::dsl::sql::<diesel::sql_types::BigInt>(
-            "`events`.`id`",
-        ))
+        .select((source_column(id), source_column_as(tenant_id, "tenant")))
+        .filter(success.eq(true));
+
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT `events`.`id`, `events`.`tenant_id` AS `tenant` FROM `events` FINAL SAMPLE ? PREWHERE (`events`.`tenant_id` = ?) WHERE (`events`.`success` = ?)"
+    );
+}
+
+#[test]
+fn renders_aliased_source_wrapper() {
+    use self::events::dsl::*;
+
+    let source = alias_source(final_table(events), "e");
+    let query = source
+        .select(diesel::dsl::sql::<diesel::sql_types::BigInt>("e.id AS id"))
         .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "`events`.`success` = 1",
+            "e.tenant_id = ?",
         ));
 
     assert_eq!(
         to_sql(&query).unwrap(),
-        "SELECT `events`.`id` FROM `events` FINAL SAMPLE ? PREWHERE (`events`.`tenant_id` = ?) WHERE `events`.`success` = 1"
+        "SELECT e.id AS id FROM `events` FINAL AS `e` WHERE e.tenant_id = ?"
     );
 }
 
@@ -235,6 +250,98 @@ fn renders_array_join_clause() {
         to_sql(&query).unwrap(),
         "SELECT `tag` FROM `events` FINAL ARRAY JOIN `events`.`tags` AS `tag` WHERE `tag` = 'paid'"
     );
+}
+
+#[test]
+fn rendered_sql_reports_bind_metadata() {
+    use self::events::dsl::*;
+
+    let query = events
+        .select((
+            id,
+            diesel::dsl::sql::<diesel::sql_types::Text>("{bucket:String}"),
+        ))
+        .filter(tenant_id.eq("acme"))
+        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "has({allowed:Array(String)}, tags) AND payload != '?'",
+        ))
+        .limit(5);
+    let rendered = to_sql_with_metadata(&query).unwrap();
+
+    assert_eq!(rendered.positional_bind_count(), 2);
+    assert_eq!(rendered.named_parameters(), &["bucket", "allowed"]);
+}
+
+#[test]
+fn scanner_ignores_placeholders_inside_quotes_and_comments() {
+    // Each non-Normal lexer state must hide `?` and `{name:Type}` from the
+    // scan. Only the two trailing real placeholders should be counted.
+    let sql = "SELECT 'a ? {x:Int}', \"b ? {y:Int}\", `c ? {z:Int}`, \
+               -- d ? {w:Int}\n /* e ? {v:Int} */ ? {real:Int}";
+    let meta = analyze_rendered_sql(sql);
+
+    assert_eq!(meta.positional_bind_count, 1);
+    assert_eq!(meta.named_parameters, vec!["real".to_string()]);
+}
+
+#[test]
+fn scanner_handles_doubled_and_escaped_quotes() {
+    // A doubled `''` is an escaped quote, not a string terminator, so the `?`
+    // after it is still inside the string. The backslash escape behaves the
+    // same. The only counted placeholder is the final one outside the string.
+    let meta = analyze_rendered_sql("'it''s ? a \\' test' || 'x' || ?");
+
+    assert_eq!(meta.positional_bind_count, 1);
+    assert!(meta.named_parameters.is_empty());
+}
+
+#[test]
+fn scanner_dedupes_named_parameters_in_first_seen_order() {
+    let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int}");
+
+    assert_eq!(meta.named_parameters, vec!["b".to_string(), "a".to_string()]);
+}
+
+#[test]
+fn scanner_rejects_malformed_named_parameters() {
+    // `{` that is not a well-formed `{name:Type}` parameter (digit-led name,
+    // missing colon, unterminated) must not be reported as a parameter.
+    let meta = analyze_rendered_sql("{1bad:Int} {nocolon} {open:Int");
+
+    assert!(meta.named_parameters.is_empty());
+}
+
+#[test]
+fn aliased_source_method_form_matches_free_function() {
+    use self::events::dsl::*;
+
+    let query = final_table(events)
+        .alias_source("e")
+        .select(diesel::dsl::sql::<diesel::sql_types::BigInt>("e.id"));
+
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT e.id FROM `events` FINAL AS `e`"
+    );
+}
+
+#[test]
+fn invalid_source_alias_is_rejected() {
+    use self::events::dsl::*;
+
+    let query = alias_source(final_table(events), "1bad")
+        .select(diesel::dsl::sql::<diesel::sql_types::BigInt>("e.id"));
+
+    assert!(to_sql(&query).is_err());
+}
+
+#[test]
+fn invalid_column_alias_is_rejected() {
+    use self::events::dsl::*;
+
+    let query = events.select(source_column_as(id, "has space"));
+
+    assert!(to_sql(&query).is_err());
 }
 
 #[test]

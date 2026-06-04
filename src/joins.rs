@@ -427,42 +427,71 @@ impl JoinModifier {
     }
 }
 
-/// A Diesel table column made selectable from a [`ClickHouseJoin`] source.
+/// A Diesel table column made selectable from a custom ClickHouse query source.
 ///
 /// Diesel's `table!` macro only implements `SelectableExpression` for a column
-/// against Diesel's own built-in join nodes, so a bare `events::id` cannot be
-/// passed to `.select(...)` on a [`ClickHouseJoin`]. Wrapping it with
-/// [`join_column`] keeps the column's SQL type — so the Rust type the query
-/// loads is still checked — and renders the same `` `table`.`column` `` SQL,
-/// while satisfying the selection bound for the custom join source. This
-/// replaces the previous `sql::<(BigInt, Text)>("`events`.`id`, ...")` escape
-/// hatch, which threw away both the column names and their SQL types.
+/// against the table itself and Diesel's own built-in join nodes, so a bare
+/// `events::id` cannot be passed to `.select(...)` on custom sources such as
+/// [`ClickHouseJoin`], [`Final`](crate::Final), [`Sample`](crate::Sample), or
+/// [`Prewhere`](crate::Prewhere). Wrapping it with [`source_column`] keeps the
+/// column's SQL type — so the Rust type the query loads is still checked — and
+/// renders the same `` `table`.`column` `` SQL, while satisfying the selection
+/// bound for custom source wrappers.
 ///
 /// The wrapper deliberately does **not** verify that the column's table appears
-/// in the join. That from-clause check is exactly what Diesel's built-in joins
+/// in the source. That from-clause check is exactly what Diesel's built-in joins
 /// provide and what Rust's orphan rule prevents a third-party backend from
-/// reproducing for arbitrary foreign columns. The `ON`/`USING` constraint and
-/// any `filter`/`order` predicates still use real, type-checked columns; only
-/// the projection trades the appearance check for type-correct loading.
+/// reproducing for arbitrary foreign columns. Predicates can still use real,
+/// type-checked columns when Diesel accepts the source; only the projection
+/// trades the appearance check for type-correct loading.
 #[derive(Debug, Clone, Copy)]
 pub struct JoinColumn<C>(C);
 
-/// Wrap a Diesel column so it can be selected from a [`ClickHouseJoin`].
+/// A selectable custom-source column that renders `AS alias`.
+#[derive(Debug, Clone)]
+pub struct AliasedColumn<C> {
+    column: C,
+    alias: String,
+}
+
+/// Wrap a Diesel column so it can be selected from custom ClickHouse sources.
 ///
 /// ```ignore
-/// events::table
-///     .clickhouse_join(tenants::table)
-///     .any()
-///     .inner()
-///     .on(events::tenant_id.eq(tenants::tenant_id))
-///     .select((join_column(events::id), join_column(tenants::plan)))
-///     .load::<(i64, String)>(&mut conn)?;
+/// final_table(events::table)
+///     .select(source_column(events::id))
+///     .load::<i64>(&mut conn)
+///     .await?;
 /// ```
-pub fn join_column<C>(column: C) -> JoinColumn<C>
+pub fn source_column<C>(column: C) -> JoinColumn<C>
 where
     C: Expression,
 {
     JoinColumn(column)
+}
+
+/// Wrap a Diesel column and render `AS alias` for result-shape validation.
+///
+/// This is useful when selecting a qualified column through a join but loading
+/// into a struct field that expects the unqualified column name.
+pub fn source_column_as<C>(column: C, alias: impl Into<String>) -> AliasedColumn<C>
+where
+    C: Expression,
+{
+    AliasedColumn {
+        column,
+        alias: alias.into(),
+    }
+}
+
+/// Backwards-compatible name for [`source_column`].
+///
+/// Historically this helper was introduced for [`ClickHouseJoin`], but it is
+/// equally useful for all custom ClickHouse source wrappers.
+pub fn join_column<C>(column: C) -> JoinColumn<C>
+where
+    C: Expression,
+{
+    source_column(column)
 }
 
 impl<C> Expression for JoinColumn<C>
@@ -496,8 +525,42 @@ where
 {
     fn walk_ast<'b>(&'b self, out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
         // A Diesel column already renders fully table-qualified
-        // (`` `table`.`column` ``), which is exactly what a join projection needs.
+        // (`` `table`.`column` ``), which is exactly what a custom-source
+        // projection needs.
         self.0.walk_ast(out)
+    }
+}
+
+impl<C> Expression for AliasedColumn<C>
+where
+    C: Expression,
+{
+    type SqlType = C::SqlType;
+}
+
+impl<C, QS> AppearsOnTable<QS> for AliasedColumn<C> where C: Expression {}
+
+impl<C, QS> SelectableExpression<QS> for AliasedColumn<C> where C: Expression {}
+
+impl<C, GroupBy> ValidGrouping<GroupBy> for AliasedColumn<C> {
+    type IsAggregate = is_aggregate::Never;
+}
+
+impl<C> QueryId for AliasedColumn<C> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<C> QueryFragment<ClickHouse> for AliasedColumn<C>
+where
+    C: QueryFragment<ClickHouse>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        self.column.walk_ast(out.reborrow())?;
+        out.push_sql(" AS ");
+        validate_bare_identifier(&self.alias, "column alias")?;
+        out.push_identifier(&self.alias)?;
+        Ok(())
     }
 }
 

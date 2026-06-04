@@ -7,7 +7,7 @@
 use diesel::expression::functions::define_sql_function;
 use diesel::sql_types::{SingleValue, SqlType};
 
-use crate::types::{AggregateFunction, Array};
+use crate::types::AggregateFunction;
 
 define_sql_function! {
     /// `toDate(expr)`.
@@ -420,91 +420,91 @@ define_sql_function! {
 define_sql_function! {
     /// `multiMatchAny(haystack, patterns)`.
     #[sql_name = "multiMatchAny"]
-    fn multi_match_any<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
+    fn multi_match_any<T: SqlType + SingleValue>(haystack: T, patterns: crate::types::Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
     /// `multiMatchAnyIndex(haystack, patterns)`.
     #[sql_name = "multiMatchAnyIndex"]
-    fn multi_match_any_index<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> crate::types::UInt64;
+    fn multi_match_any_index<T: SqlType + SingleValue>(haystack: T, patterns: crate::types::Array<diesel::sql_types::Text>) -> crate::types::UInt64;
 }
 
 define_sql_function! {
     /// `multiMatchAllIndices(haystack, patterns)`.
     #[sql_name = "multiMatchAllIndices"]
-    fn multi_match_all_indices<T: SqlType + SingleValue>(haystack: T, patterns: Array<diesel::sql_types::Text>) -> Array<crate::types::UInt64>;
+    fn multi_match_all_indices<T: SqlType + SingleValue>(haystack: T, patterns: crate::types::Array<diesel::sql_types::Text>) -> crate::types::Array<crate::types::UInt64>;
 }
 
 define_sql_function! {
     /// `multiFuzzyMatchAny(haystack, distance, patterns)`.
     #[sql_name = "multiFuzzyMatchAny"]
-    fn multi_fuzzy_match_any<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
+    fn multi_fuzzy_match_any<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: crate::types::Array<diesel::sql_types::Text>) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
     /// `multiFuzzyMatchAnyIndex(haystack, distance, patterns)`.
     #[sql_name = "multiFuzzyMatchAnyIndex"]
-    fn multi_fuzzy_match_any_index<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> crate::types::UInt64;
+    fn multi_fuzzy_match_any_index<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: crate::types::Array<diesel::sql_types::Text>) -> crate::types::UInt64;
 }
 
 define_sql_function! {
     /// `multiFuzzyMatchAllIndices(haystack, distance, patterns)`.
     #[sql_name = "multiFuzzyMatchAllIndices"]
-    fn multi_fuzzy_match_all_indices<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: Array<diesel::sql_types::Text>) -> Array<crate::types::UInt64>;
+    fn multi_fuzzy_match_all_indices<T: SqlType + SingleValue>(haystack: T, distance: diesel::sql_types::Integer, patterns: crate::types::Array<diesel::sql_types::Text>) -> crate::types::Array<crate::types::UInt64>;
 }
 
 define_sql_function! {
     /// `has(array, value)`.
     #[sql_name = "has"]
-    fn has<T: SqlType + SingleValue>(array: Array<T>, value: T) -> diesel::sql_types::Bool;
+    fn has<T: SqlType + SingleValue>(array: crate::types::Array<T>, value: T) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
     /// `hasAny(left, right)`.
     #[sql_name = "hasAny"]
-    fn has_any<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Bool;
+    fn has_any<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
     /// `hasAll(left, right)`.
     #[sql_name = "hasAll"]
-    fn has_all<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Bool;
+    fn has_all<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Bool;
 }
 
 define_sql_function! {
     /// `arrayJoin(array)` — expression form of ClickHouse ARRAY JOIN.
     #[sql_name = "arrayJoin"]
-    fn array_join<T: SqlType + SingleValue>(array: Array<T>) -> T;
+    fn array_join<T: SqlType + SingleValue>(array: crate::types::Array<T>) -> T;
 }
 
 define_sql_function! {
     /// `arrayElement(array, index)`.
     #[sql_name = "arrayElement"]
-    fn array_element<T: SqlType + SingleValue, Index: SqlType + SingleValue>(array: Array<T>, index: Index) -> T;
+    fn array_element<T: SqlType + SingleValue, Index: SqlType + SingleValue>(array: crate::types::Array<T>, index: Index) -> T;
 }
 
 define_sql_function! {
     /// `arrayConcat(left, right)`.
     #[sql_name = "arrayConcat"]
-    fn array_concat<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> Array<T>;
+    fn array_concat<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> crate::types::Array<T>;
 }
 
 define_sql_function! {
     /// `arrayDistinct(array)`.
     #[sql_name = "arrayDistinct"]
-    fn array_distinct<T: SqlType + SingleValue>(array: Array<T>) -> Array<T>;
+    fn array_distinct<T: SqlType + SingleValue>(array: crate::types::Array<T>) -> crate::types::Array<T>;
 }
 
 define_sql_function! {
     /// `mapKeys(map)`.
     #[sql_name = "mapKeys"]
-    fn map_keys<K: SqlType + SingleValue, V: SqlType + SingleValue>(map: crate::types::Map<K, V>) -> Array<K>;
+    fn map_keys<K: SqlType + SingleValue, V: SqlType + SingleValue>(map: crate::types::Map<K, V>) -> crate::types::Array<K>;
 }
 
 define_sql_function! {
     /// `mapValues(map)`.
     #[sql_name = "mapValues"]
-    fn map_values<K: SqlType + SingleValue, V: SqlType + SingleValue>(map: crate::types::Map<K, V>) -> Array<V>;
+    fn map_values<K: SqlType + SingleValue, V: SqlType + SingleValue>(map: crate::types::Map<K, V>) -> crate::types::Array<V>;
 }
 
 define_sql_function! {
@@ -516,7 +516,7 @@ define_sql_function! {
 define_sql_function! {
     /// `mapFromArrays(keys, values)`.
     #[sql_name = "mapFromArrays"]
-    fn map_from_arrays<K: SqlType + SingleValue, V: SqlType + SingleValue>(keys: Array<K>, values: Array<V>) -> crate::types::Map<K, V>;
+    fn map_from_arrays<K: SqlType + SingleValue, V: SqlType + SingleValue>(keys: crate::types::Array<K>, values: crate::types::Array<V>) -> crate::types::Map<K, V>;
 }
 
 define_sql_function! {
@@ -792,43 +792,43 @@ define_sql_function! {
 define_sql_function! {
     /// `L1Distance(vector1, vector2)`.
     #[sql_name = "L1Distance"]
-    fn l1_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+    fn l1_distance<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `L2Distance(vector1, vector2)`.
     #[sql_name = "L2Distance"]
-    fn l2_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+    fn l2_distance<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `LinfDistance(vector1, vector2)`.
     #[sql_name = "LinfDistance"]
-    fn linf_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+    fn linf_distance<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `cosineDistance(vector1, vector2)`.
     #[sql_name = "cosineDistance"]
-    fn cosine_distance<T: SqlType + SingleValue>(left: Array<T>, right: Array<T>) -> diesel::sql_types::Double;
+    fn cosine_distance<T: SqlType + SingleValue>(left: crate::types::Array<T>, right: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `L1Norm(vector)`.
     #[sql_name = "L1Norm"]
-    fn l1_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+    fn l1_norm<T: SqlType + SingleValue>(vector: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `L2Norm(vector)`.
     #[sql_name = "L2Norm"]
-    fn l2_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+    fn l2_norm<T: SqlType + SingleValue>(vector: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
     /// `LinfNorm(vector)`.
     #[sql_name = "LinfNorm"]
-    fn linf_norm<T: SqlType + SingleValue>(vector: Array<T>) -> diesel::sql_types::Double;
+    fn linf_norm<T: SqlType + SingleValue>(vector: crate::types::Array<T>) -> diesel::sql_types::Double;
 }
 
 define_sql_function! {
@@ -954,14 +954,14 @@ define_sql_function! {
     /// `groupArrayState(expr)`.
     #[aggregate]
     #[sql_name = "groupArrayState"]
-    fn group_array_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<Array<T>>;
+    fn group_array_state<T: SqlType + SingleValue>(expr: T) -> AggregateFunction<crate::types::Array<T>>;
 }
 
 define_sql_function! {
     /// `groupArrayMerge(state)`.
     #[aggregate]
     #[sql_name = "groupArrayMerge"]
-    fn group_array_merge<T: SqlType + SingleValue>(state: AggregateFunction<Array<T>>) -> Array<T>;
+    fn group_array_merge<T: SqlType + SingleValue>(state: AggregateFunction<crate::types::Array<T>>) -> crate::types::Array<T>;
 }
 
 define_sql_function! {
@@ -1037,14 +1037,14 @@ define_sql_function! {
     /// `groupArray(expr)`.
     #[aggregate]
     #[sql_name = "groupArray"]
-    fn group_array<T: SqlType + SingleValue>(expr: T) -> Array<T>;
+    fn group_array<T: SqlType + SingleValue>(expr: T) -> crate::types::Array<T>;
 }
 
 define_sql_function! {
     /// `groupArrayIf(expr, predicate)`.
     #[aggregate]
     #[sql_name = "groupArrayIf"]
-    fn group_array_if<T: SqlType + SingleValue, Cond: SqlType + SingleValue>(expr: T, cond: Cond) -> Array<T>;
+    fn group_array_if<T: SqlType + SingleValue, Cond: SqlType + SingleValue>(expr: T, cond: Cond) -> crate::types::Array<T>;
 }
 
 define_sql_function! {
