@@ -30,11 +30,11 @@ async-connection-wrapper = ["diesel-async/async-connection-wrapper"]
 # surface. Keep the upper bound explicit: each Diesel minor can alter backend
 # internals and should be validated before widening this range.
 diesel = { version = ">=2.3, <2.4", default-features = false, features = ["i-implement-a-third-party-backend-and-opt-into-breaking-changes", "with-deprecated"] }
-# diesel-async 0.7 pins diesel ~2.3, matching the range above. No built-in
+# diesel-async 0.9 pins Diesel 2.3, matching the range above. No built-in
 # backend feature is enabled: ClickHouse is a third-party backend.
-diesel-async = { version = "0.7", default-features = false }
+diesel-async = { version = "0.9", default-features = false }
 bigdecimal = { version = ">=0.0.13, <0.5.0", optional = true }
-clickhouse = "0.15"
+clickhouse = { version = "0.15", features = ["uuid", "time"] }
 futures-util = "0.3"
 url = "2"
 

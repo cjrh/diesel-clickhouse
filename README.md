@@ -5,7 +5,7 @@
 
 [Diesel](https://diesel.rs/) query-builder extensions for [ClickHouse](https://clickhouse.com/) SQL.
 
-This crate provides a lightweight `ClickHouse` backend for rendering Diesel ASTs as ClickHouse SQL, typed helpers for common ClickHouse functions and clauses, and an initial HTTP-backed Diesel `Connection` implementation for idiomatic `load`/`execute` workflows.
+This crate provides a lightweight `ClickHouse` backend for rendering Diesel ASTs as ClickHouse SQL, typed helpers for common ClickHouse functions and clauses, and an HTTP-backed native async Diesel connection for idiomatic `load`/`execute` workflows.
 
 ```rust,ignore
 use diesel::prelude::*;
@@ -46,7 +46,7 @@ See `docs/USAGE.md` for usage guidance, `docs/TUTORIAL.md` for a ClickHouse NYC 
 
 ```toml
 [dependencies]
-diesel-clickhouse = "0.3"
+diesel-clickhouse = "0.6"
 diesel = { version = "2.3", default-features = false }
 ```
 
@@ -54,7 +54,7 @@ Enable native BigDecimal decimal values when needed:
 
 ```toml
 [dependencies]
-diesel-clickhouse = { version = "0.3", features = ["bigdecimal"] }
+diesel-clickhouse = { version = "0.6", features = ["bigdecimal"] }
 ```
 
 Note that this crate re-exports `clickhouse` so you can use `diesel_clickhouse::clickhouse` to access the underlying client for features outside the scope of Diesel.

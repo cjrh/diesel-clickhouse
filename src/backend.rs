@@ -185,6 +185,37 @@ impl QueryFragment<ClickHouse> for BoxedLimitOffsetClause<'_, ClickHouse> {
     }
 }
 
+/// Metadata extracted from rendered ClickHouse SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSqlMetadata {
+    /// Number of positional `?` placeholders outside quoted strings/comments.
+    pub positional_bind_count: usize,
+    /// ClickHouse HTTP parameter names such as `tenant_id` from
+    /// `{tenant_id:String}`, in first-seen order.
+    pub named_parameters: Vec<String>,
+}
+
+/// Rendered SQL plus lightweight bind metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RenderedSql {
+    /// SQL produced by the Diesel AST.
+    pub sql: String,
+    /// Placeholder/parameter metadata parsed from [`Self::sql`].
+    pub metadata: RenderedSqlMetadata,
+}
+
+impl RenderedSql {
+    /// Number of positional `?` placeholders outside quoted strings/comments.
+    pub fn positional_bind_count(&self) -> usize {
+        self.metadata.positional_bind_count
+    }
+
+    /// ClickHouse HTTP parameter names in first-seen order.
+    pub fn named_parameters(&self) -> &[String] {
+        &self.metadata.named_parameters
+    }
+}
+
 /// Render any Diesel AST node as ClickHouse SQL without the debug bind comment.
 ///
 /// Bind parameters are represented as `?`, matching the placeholder style used
@@ -199,4 +230,143 @@ where
     let mut query_builder = ClickHouseQueryBuilder::default();
     query.to_sql(&mut query_builder, &backend)?;
     Ok(query_builder.finish())
+}
+
+/// Render SQL and return lightweight placeholder metadata.
+///
+/// This helper is intentionally transport-agnostic: it does not own the bind
+/// values, but it lets callers using [`to_sql`] with `clickhouse::Client` assert
+/// that their later `.bind(...)` and `.param(...)` calls match the rendered SQL.
+pub fn to_sql_with_metadata<T>(query: &T) -> QueryResult<RenderedSql>
+where
+    T: QueryFragment<ClickHouse>,
+{
+    let sql = to_sql(query)?;
+    let metadata = analyze_rendered_sql(&sql);
+    Ok(RenderedSql { sql, metadata })
+}
+
+/// Extract positional and ClickHouse named parameter metadata from SQL.
+///
+/// The scanner ignores placeholders inside single-quoted strings, double-quoted
+/// identifiers/strings, backtick identifiers, line comments, and block comments.
+pub fn analyze_rendered_sql(sql: &str) -> RenderedSqlMetadata {
+    #[derive(Clone, Copy)]
+    enum State {
+        Normal,
+        SingleQuote,
+        DoubleQuote,
+        Backtick,
+        LineComment,
+        BlockComment,
+    }
+
+    let mut state = State::Normal;
+    let mut positional_bind_count = 0;
+    let mut named_parameters = Vec::new();
+    let chars: Vec<char> = sql.chars().collect();
+    let mut idx = 0;
+
+    while idx < chars.len() {
+        let ch = chars[idx];
+        let next = chars.get(idx + 1).copied();
+        match state {
+            State::Normal => match (ch, next) {
+                ('?', _) => positional_bind_count += 1,
+                ('\'', _) => state = State::SingleQuote,
+                ('"', _) => state = State::DoubleQuote,
+                ('`', _) => state = State::Backtick,
+                ('-', Some('-')) => {
+                    state = State::LineComment;
+                    idx += 1;
+                }
+                ('/', Some('*')) => {
+                    state = State::BlockComment;
+                    idx += 1;
+                }
+                ('{', _) => {
+                    if let Some((name, end_idx)) = parse_named_parameter(&chars, idx) {
+                        if !named_parameters.iter().any(|seen| seen == &name) {
+                            named_parameters.push(name);
+                        }
+                        idx = end_idx;
+                    }
+                }
+                _ => {}
+            },
+            State::SingleQuote => match (ch, next) {
+                ('\\', Some(_)) => idx += 1,
+                ('\'', Some('\'')) => idx += 1,
+                ('\'', _) => state = State::Normal,
+                _ => {}
+            },
+            State::DoubleQuote => match (ch, next) {
+                ('\\', Some(_)) => idx += 1,
+                ('"', Some('"')) => idx += 1,
+                ('"', _) => state = State::Normal,
+                _ => {}
+            },
+            State::Backtick => match (ch, next) {
+                ('`', Some('`')) => idx += 1,
+                ('`', _) => state = State::Normal,
+                _ => {}
+            },
+            State::LineComment => {
+                if ch == '\n' {
+                    state = State::Normal;
+                }
+            }
+            State::BlockComment => {
+                if ch == '*' && next == Some('/') {
+                    state = State::Normal;
+                    idx += 1;
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    RenderedSqlMetadata {
+        positional_bind_count,
+        named_parameters,
+    }
+}
+
+fn parse_named_parameter(chars: &[char], start: usize) -> Option<(String, usize)> {
+    let mut idx = start + 1;
+    let first = *chars.get(idx)?;
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return None;
+    }
+
+    let mut name = String::new();
+    name.push(first);
+    idx += 1;
+    while let Some(ch) = chars.get(idx).copied() {
+        if ch == ':' {
+            break;
+        }
+        if !(ch == '_' || ch.is_ascii_alphanumeric()) {
+            return None;
+        }
+        name.push(ch);
+        idx += 1;
+    }
+
+    if chars.get(idx).copied() != Some(':') {
+        return None;
+    }
+
+    idx += 1;
+    while let Some(ch) = chars.get(idx).copied() {
+        if ch == '}' {
+            return Some((name, idx));
+        }
+        if ch == '\n' || ch == '\r' || ch == '\'' || ch == '"' || ch == '`' || ch == '{' {
+            return None;
+        }
+        idx += 1;
+    }
+
+    None
 }

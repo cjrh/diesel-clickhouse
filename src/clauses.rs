@@ -22,6 +22,25 @@ where
     }
 }
 
+/// Render a table-like query source as `source AS alias`.
+///
+/// This is most useful with ClickHouse source wrappers, such as
+/// `alias_source(final_table(events::table), "e")`, when downstream SQL
+/// fragments need a compact table alias. Apply the alias before wrappers that
+/// render full clauses (`prewhere(alias_source(...), predicate)` rather than
+/// `alias_source(prewhere(...), "e")`).
+pub fn alias_source<T>(source: T, alias: impl Into<String>) -> AliasedSource<T>
+where
+    T: QuerySource,
+{
+    let from_clause = source.from_clause();
+    AliasedSource {
+        _source: source,
+        from_clause,
+        alias: alias.into(),
+    }
+}
+
 /// Wrap a table or subquery with ClickHouse's `SAMPLE <ratio>` modifier.
 pub fn sample<T, Ratio>(source: T, ratio: Ratio) -> Sample<T, Ratio::Expression>
 where
@@ -343,6 +362,14 @@ pub trait ClickHouseQueryDsl: Sized {
         crate::window::qualify(self, predicate)
     }
 
+    /// Render this table-like query source as `source AS alias`.
+    fn alias_source(self, alias: impl Into<String>) -> AliasedSource<Self>
+    where
+        Self: QuerySource,
+    {
+        crate::clauses::alias_source(self, alias)
+    }
+
     /// Treat this query source as `source ARRAY JOIN expr`.
     fn array_join<Expr>(self, expr: Expr) -> ArrayJoin<Self, Expr>
     where
@@ -387,6 +414,14 @@ impl<T> ClickHouseQueryDsl for T {}
 pub struct Final<T: QuerySource> {
     _source: T,
     from_clause: T::FromClause,
+}
+
+/// `FROM source AS alias` query source wrapper.
+#[derive(Debug, Clone)]
+pub struct AliasedSource<T: QuerySource> {
+    _source: T,
+    from_clause: T::FromClause,
+    alias: String,
 }
 
 /// `FROM table SAMPLE ratio [OFFSET offset]` query source wrapper.
@@ -766,6 +801,23 @@ where
     }
 }
 
+impl<T> QuerySource for AliasedSource<T>
+where
+    T: QuerySource + Clone,
+    T::FromClause: Clone,
+{
+    type FromClause = Self;
+    type DefaultSelection = SqlLiteral<Untyped>;
+
+    fn from_clause(&self) -> Self::FromClause {
+        self.clone()
+    }
+
+    fn default_selection(&self) -> Self::DefaultSelection {
+        diesel::dsl::sql("*")
+    }
+}
+
 impl<T, Ratio, Offset> QuerySource for Sample<T, Ratio, Offset>
 where
     T: QuerySource + Clone,
@@ -822,6 +874,14 @@ where
 }
 
 impl<T, QS> AppearsInFromClause<QS> for Final<T>
+where
+    T: QuerySource + AppearsInFromClause<QS>,
+    QS: QuerySource,
+{
+    type Count = <T as AppearsInFromClause<QS>>::Count;
+}
+
+impl<T, QS> AppearsInFromClause<QS> for AliasedSource<T>
 where
     T: QuerySource + AppearsInFromClause<QS>,
     QS: QuerySource,
@@ -906,11 +966,20 @@ macro_rules! impl_query_source_query_dsl {
 }
 
 impl_query_source_query_dsl!(Final<T> where T: QuerySource + Clone, T::FromClause: Clone,);
+impl_query_source_query_dsl!(AliasedSource<T> where T: QuerySource + Clone, T::FromClause: Clone,);
 impl_query_source_query_dsl!(Sample<T, Ratio, Offset> where T: QuerySource + Clone, T::FromClause: Clone, Ratio: Expression + Clone, Offset: Clone,);
 impl_query_source_query_dsl!(Prewhere<T, Predicate> where T: QuerySource + Clone, T::FromClause: Clone, Predicate: Expression + Clone,);
 impl_query_source_query_dsl!(ArrayJoin<T, Expr> where T: QuerySource + Clone, T::FromClause: Clone, Expr: Expression + Clone,);
 
 impl<T> QueryId for Final<T>
+where
+    T: QuerySource,
+{
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<T> QueryId for AliasedSource<T>
 where
     T: QuerySource,
 {
@@ -950,6 +1019,20 @@ where
     fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
         self.from_clause.walk_ast(out.reborrow())?;
         out.push_sql(" FINAL");
+        Ok(())
+    }
+}
+
+impl<T> QueryFragment<ClickHouse> for AliasedSource<T>
+where
+    T: QuerySource,
+    T::FromClause: QueryFragment<ClickHouse>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        self.from_clause.walk_ast(out.reborrow())?;
+        out.push_sql(" AS ");
+        validate_bare_identifier(&self.alias, "source alias")?;
+        out.push_identifier(&self.alias)?;
         Ok(())
     }
 }

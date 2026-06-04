@@ -81,17 +81,21 @@ pub use aggregates::{
     approx_top_sum_with_reserved, histogram, quantile, quantile_deterministic, quantile_exact,
     quantile_tdigest, quantile_timing, quantiles, quantiles_timing, top_k,
 };
-pub use backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, to_sql};
+pub use backend::{
+    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, RenderedSql, RenderedSqlMetadata,
+    analyze_rendered_sql, to_sql, to_sql_with_metadata,
+};
 pub use cast::{
     CastFunction, accurate_cast, accurate_cast_or_default, accurate_cast_or_null, cast,
 };
 pub use clauses::{
-    ArrayJoin, ArrayJoinKind, ClickHouseQueryDsl, Final, Format, FormattedQuery, IntoOutfileQuery,
-    LimitBy, LimitWithTies, NoSampleOffset, NoWithBindings, OutfileCompression, OutfileMode,
-    Prewhere, Sample, SampleOffset, Setting, SettingValue, SettingsQuery, WithBinding,
-    WithCteBinding, WithQuery, array_join_clause, array_join_clause_as, final_table, format,
-    into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col, prewhere,
-    sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte, with_ties,
+    AliasedSource, ArrayJoin, ArrayJoinKind, ClickHouseQueryDsl, Final, Format, FormattedQuery,
+    IntoOutfileQuery, LimitBy, LimitWithTies, NoSampleOffset, NoWithBindings, OutfileCompression,
+    OutfileMode, Prewhere, Sample, SampleOffset, Setting, SettingValue, SettingsQuery, WithBinding,
+    WithCteBinding, WithQuery, alias_source, array_join_clause, array_join_clause_as, final_table,
+    format, into_outfile, left_array_join_clause, left_array_join_clause_as, limit_by_col,
+    prewhere, sample, sample_offset, settings, with_alias, with_cte, with_materialized_cte,
+    with_ties,
 };
 pub use clickhouse;
 pub use connection::{
@@ -150,8 +154,9 @@ pub use higher_order::{
     array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
 };
 pub use joins::{
-    ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind, JoinModifier,
-    JoinOn, JoinStrictness, JoinUsing, clickhouse_join, join_column,
+    AliasedColumn, ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind,
+    JoinModifier, JoinOn, JoinStrictness, JoinUsing, clickhouse_join, join_column, source_column,
+    source_column_as,
 };
 pub use json::{
     JsonPathFunction, JsonPathSegment, json_extract_bool_path, json_extract_float_path,

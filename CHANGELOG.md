@@ -10,6 +10,15 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- `source_column(...)` and `source_column_as(...)` helpers for typed projections through custom ClickHouse sources such as `FINAL`, `SAMPLE`, `PREWHERE`, `ARRAY JOIN`, and `ClickHouseJoin`; `join_column(...)` remains as a backwards-compatible alias.
+- `alias_source(...)` / `.alias_source(...)` for rendering `source AS alias` around ClickHouse source wrappers.
+- `to_sql_with_metadata(...)` and `analyze_rendered_sql(...)` to report positional `?` placeholder counts and ClickHouse named HTTP parameters outside quoted strings/comments.
+
+### Changed
+- Updated `diesel-async` to `0.9`, matching Diesel `2.3`.
+- Enabled the `uuid` and `time` features on the re-exported `clickhouse` client so downstream crates can use those row/bind types through `diesel_clickhouse::clickhouse`.
+
 ## [0.6.0] — 2026-06-03
 
 ### Changed
