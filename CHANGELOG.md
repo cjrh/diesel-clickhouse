@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-04
+
 ### Added
 - `source_column(...)` and `source_column_as(...)` helpers for typed projections through custom ClickHouse sources such as `FINAL`, `SAMPLE`, `PREWHERE`, `ARRAY JOIN`, and `ClickHouseJoin`; `join_column(...)` remains as a backwards-compatible alias.
 - `alias_source(...)` / `.alias_source(...)` for rendering `source AS alias` around ClickHouse source wrappers.
@@ -86,7 +88,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.6.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.6.0
 [0.5.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.5.0
 [0.4.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.4.0
