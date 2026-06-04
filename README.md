@@ -40,7 +40,14 @@ let sql = to_sql(&query)?;
 
 See the [Feature Matrix](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/feature_matrix/index.html) for the currently supported and planned features.
 
-See `docs/USAGE.md` for usage guidance, `docs/COOKBOOK.md` for copyable raw-SQL-to-Diesel recipes, `docs/TUTORIAL.md` for a ClickHouse NYC taxi tutorial translated to Diesel, `tests/sql_render.rs` for render examples, and `docs/CONNECTION_DESIGN.md` for connection design notes.
+See
+[USAGE](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/usage/index.html)
+for usage guidance,
+[COOKBOOK](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/cookbook/index.html)
+for copyable raw-SQL-to-Diesel recipes,
+[TUTORIAL](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/tutorial/index.html)
+for a ClickHouse NYC taxi tutorial translated to Diesel,
+and `tests/sql_render.rs` for render examples.
 
 ## Installation
 
@@ -59,7 +66,7 @@ diesel-clickhouse = { version = "0.6", features = ["bigdecimal"] }
 
 Note that this crate re-exports `clickhouse` so you can use `diesel_clickhouse::clickhouse` to access the underlying client for features outside the scope of Diesel.
 We do not re-export `diesel` itself, so you have to verify that your `diesel` version matches.
-We are currently supporting Diesel (>=2.3, <2.4). 
+We are currently supporting Diesel (>=2.3, <2.4).
 
 ## Cookbook
 
