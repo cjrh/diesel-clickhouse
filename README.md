@@ -41,11 +41,11 @@ let sql = to_sql(&query)?;
 See the [Feature Matrix](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/feature_matrix/index.html) for the currently supported and planned features.
 
 See
-[USAGE](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/usage/index.html)
+[USAGE](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/usage/index.html)
 for usage guidance,
-[COOKBOOK](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/cookbook/index.html)
+[COOKBOOK](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/cookbook/index.html)
 for copyable raw-SQL-to-Diesel recipes,
-[TUTORIAL](https://docs.rs/diesel-clickhouse/0.7.0/diesel_clickhouse/docs/tutorial/index.html)
+[TUTORIAL](https://docs.rs/diesel-clickhouse/latest/diesel_clickhouse/docs/tutorial/index.html)
 for a ClickHouse NYC taxi tutorial translated to Diesel,
 and `tests/sql_render.rs` for render examples.
 
@@ -53,7 +53,7 @@ and `tests/sql_render.rs` for render examples.
 
 ```toml
 [dependencies]
-diesel-clickhouse = "0.6"
+diesel-clickhouse = "<tag>"
 diesel = { version = "2.3", default-features = false }
 ```
 
@@ -61,7 +61,7 @@ Enable native BigDecimal decimal values when needed:
 
 ```toml
 [dependencies]
-diesel-clickhouse = { version = "0.6", features = ["bigdecimal"] }
+diesel-clickhouse = { version = "<tag>", features = ["bigdecimal"] }
 ```
 
 Note that this crate re-exports `clickhouse` so you can use `diesel_clickhouse::clickhouse` to access the underlying client for features outside the scope of Diesel.
