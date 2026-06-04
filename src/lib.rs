@@ -42,12 +42,24 @@
 //! SQL through your ClickHouse client of choice when you need client-specific
 //! behavior.
 //!
+//! ## Start here: choose your path
+//!
+//! - **Want Diesel to own the bind values?** Execute with
+//!   [`AsyncClickHouseConnection`] and `.load`/`.execute`.
+//! - **Rendering SQL for another ClickHouse client?** Use
+//!   [`to_sql_with_metadata`] and re-supply the bind values yourself.
+//! - **Need bulk ingestion?** Use [`AsyncClickHouseConnection::insert_batch`].
+//! - **Need ClickHouse syntax with no typed binding?** Use
+//!   `diesel::dsl::sql::<T>(...)`, but know its contents are unchecked.
+//!
 //! ## Guides
 //!
 //! Long-form Markdown guides from `./docs/` are rendered under [`docs`] on
 //! docs.rs:
 //!
-//! - [`docs::usage`] for usage guidance.
+//! - [`docs::usage`] for the model: execution modes, the safety trade-offs, caveats.
+//! - [`docs::cookbook`] for copyable "how do I write this query?" recipes, each
+//!   verified by running its raw SQL and Diesel form and asserting equal results.
 //! - [`docs::tutorial`] for the NYC taxi tutorial translated to Diesel.
 //! - [`docs::feature_matrix`] for the implementation checklist.
 //! - [`docs::connection_design`] for connection design notes.
@@ -116,7 +128,7 @@ pub use ddl::{
 pub use functions::{
     abs, analysis_of_variance, any_last, any_value, arg_max, arg_min, array_concat, array_distinct,
     array_element, array_join, avg_if, avg_merge, avg_merge_state, avg_state, base64_decode,
-    base64_encode, ceil, city_hash64, concat, corr, cosine_distance, count_if, count_merge,
+    base64_encode, ceil, city_hash64, concat, corr, cosine_distance, count, count_if, count_merge,
     count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
     cut_query_string, date_diff, date_trunc, domain, domain_without_www, empty, farm_fingerprint64,
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array,
@@ -155,8 +167,8 @@ pub use higher_order::{
 };
 pub use joins::{
     AliasedColumn, ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind,
-    JoinModifier, JoinOn, JoinStrictness, JoinUsing, clickhouse_join, join_column, source_column,
-    source_column_as,
+    JoinModifier, JoinOn, JoinStrictness, JoinUsing, clickhouse_join, expr_as, join_column,
+    source_column, source_column_as,
 };
 pub use json::{
     JsonPathFunction, JsonPathSegment, json_extract_bool_path, json_extract_float_path,

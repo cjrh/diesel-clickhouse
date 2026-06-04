@@ -10,6 +10,17 @@ jobs:
     name: test
     runs-on: ubuntu-latest
 
+    # A standalone ClickHouse for the cookbook example, which is a separate
+    # binary (the in-process `testcontainers` server the live tests use is not
+    # reachable from it). The default user gets the password below.
+    services:
+      clickhouse:
+        image: clickhouse/clickhouse-server:25.3
+        ports:
+          - 8123:8123
+        env:
+          CLICKHOUSE_PASSWORD: password
+
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -31,6 +42,26 @@ jobs:
 
       - name: live ClickHouse tests with bigdecimal
         run: cargo test --features bigdecimal --test live_clickhouse -- --ignored --nocapture
+
+      # Runs every cookbook recipe's raw SQL and Diesel form against the service
+      # container and asserts they return identical rows. No `--write`, so this
+      # only verifies parity; it does not regenerate docs/COOKBOOK.md. A diverging
+      # recipe panics and fails the build.
+      - name: cookbook recipe parity (raw SQL == Diesel)
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS "http://localhost:8123/ping" >/dev/null 2>&1; then
+              ready=1
+              break
+            fi
+            sleep 1
+          done
+          if [[ "${ready:-0}" != 1 ]]; then
+            echo "ClickHouse service did not become ready" >&2
+            exit 1
+          fi
+          CLICKHOUSE_URL="http://default:password@localhost:8123/default" \
+            cargo run --example cookbook >/dev/null
 
       - name: clippy
         run: cargo clippy --all-targets -- -D warnings

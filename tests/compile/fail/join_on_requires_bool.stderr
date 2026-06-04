@@ -1,0 +1,24 @@
+error[E0277]: `diesel::sql_types::BigInt` is neither `diesel::sql_types::Bool` nor `diesel::sql_types::Nullable<Bool>`
+  --> tests/compile/fail/join_on_requires_bool.rs:27:13
+   |
+27 |         .on(id);
+   |          -- ^^ the trait `BoolOrNullableBool` is not implemented for `diesel::sql_types::BigInt`
+   |          |
+   |          required by a bound introduced by this call
+   |
+   = note: try to provide an expression that produces one of the expected sql types
+help: the following other types implement trait `BoolOrNullableBool`
+  --> $CARGO/diesel-$VERSION/src/sql_types/mod.rs
+   |
+   | impl BoolOrNullableBool for Bool {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `diesel::sql_types::Bool`
+   | impl BoolOrNullableBool for Nullable<Bool> {}
+   | ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^ `diesel::sql_types::Nullable<diesel::sql_types::Bool>`
+note: required by a bound in `ClickHouseJoinBuilder::<Left, Right>::on`
+  --> src/joins.rs
+   |
+   |     pub fn on<Predicate>(
+   |            -- required by a bound in this associated function
+...
+   |         Predicate::SqlType: BoolOrNullableBool,
+   |                             ^^^^^^^^^^^^^^^^^^ required by this bound in `ClickHouseJoinBuilder::<Left, Right>::on`

@@ -62,6 +62,50 @@ tutorial output="docs/TUTORIAL.md":
     CLICKHOUSE_URL="$clickhouse_url" cargo run --example tutorial -- --write '{{output}}'
     echo "Tutorial Markdown written to {{output}}"
 
+# Generate the cookbook against a disposable ClickHouse container. Each recipe's
+# raw SQL and Diesel query are both executed and asserted to return equal rows.
+cookbook output="docs/COOKBOOK.md":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    container="diesel-clickhouse-cookbook"
+    image="clickhouse/clickhouse-server:25.3"
+    password="password"
+
+    cleanup() {
+        docker rm -f "$container" >/dev/null 2>&1 || true
+    }
+    cleanup
+    trap cleanup EXIT
+
+    docker run -d --name "$container" \
+        -p 127.0.0.1::8123 \
+        -e CLICKHOUSE_PASSWORD="$password" \
+        --ulimit nofile=262144:262144 \
+        "$image" >/dev/null
+
+    host_port="$(docker port "$container" 8123/tcp | sed 's/.*://')"
+    root_url="http://default:${password}@127.0.0.1:${host_port}"
+    clickhouse_url="${root_url}/default"
+
+    echo "Waiting for ClickHouse at ${root_url} ..."
+    ready=0
+    for _ in {1..90}; do
+        if curl -fsS "${root_url}/?query=SELECT%201" >/dev/null 2>&1; then
+            ready=1
+            break
+        fi
+        sleep 1
+    done
+
+    if [[ "$ready" != 1 ]]; then
+        docker logs --tail 80 "$container" >&2 || true
+        exit 1
+    fi
+
+    CLICKHOUSE_URL="$clickhouse_url" cargo run --example cookbook -- --write '{{output}}'
+    echo "Cookbook Markdown written to {{output}}"
+
 # Live integration tests. The test harness starts ClickHouse with testcontainers.
 test-live:
     cargo test --test live_clickhouse -- --ignored --nocapture
@@ -78,5 +122,7 @@ clippy:
 clippy-bigdecimal:
     cargo clippy --all-targets --features bigdecimal -- -D warnings
 
-# Everything CI should care about before cutting a release.
-ci: test-unit test-examples test-bigdecimal test-live test-live-bigdecimal clippy clippy-bigdecimal
+# Everything CI should care about before cutting a release. The final dependency
+# runs the cookbook example writing to /dev/null: it asserts every recipe's raw
+# SQL and Diesel form return equal rows, without rewriting docs/COOKBOOK.md.
+ci: test-unit test-examples test-bigdecimal test-live test-live-bigdecimal clippy clippy-bigdecimal (cookbook "/dev/null")

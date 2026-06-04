@@ -971,6 +971,18 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `count()` — number of rows, returned as ClickHouse's native `UInt64`.
+    ///
+    /// Prefer this over `aggregate::<UInt64>("count").no_args()` or Diesel's
+    /// built-in [`count_star`](diesel::dsl::count_star()). ClickHouse's `count()`
+    /// yields `UInt64`, whereas `count_star` is typed `BigInt`; this helper makes
+    /// the loaded Rust type (`u64`) match what the server actually sends.
+    #[aggregate]
+    #[sql_name = "count"]
+    fn count() -> crate::types::UInt64;
+}
+
+define_sql_function! {
     /// `countIf(predicate)`.
     #[aggregate]
     #[sql_name = "countIf"]
