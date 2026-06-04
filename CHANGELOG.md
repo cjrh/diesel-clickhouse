@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-04
+
 ### Added
 - `when(enabled, predicate)` for optional filters. The ClickHouse backend does not support boxed queries (`.into_boxed()`), so the usual "conditionally add `.filter(...)`" pattern is unavailable; `when` fills the gap by rendering the predicate when `enabled` and the always-true constant `1` (binding nothing) when not. It replaces the `(? = '' OR col = ?)` sentinel workaround — the value is referenced once and the predicate stays fully typed.
 - `bind(value)` for binding a Rust value against a ClickHouse-only column type, such as the unsigned integers (`UInt8`..`UInt128`) and `Int8`/`Int128`. Diesel cannot implement `AsExpression` for primitives like `u64` against these SQL types — its blanket `AsExpression` impl makes a hand-written one a coherence conflict (E0119) in every crate, including this one — so `column.gt(after_id)` does not compile. `column.gt(bind(after_id))` does: it wraps the value in an expression of the inferred SQL type and renders it as a real `?` bind parameter, replacing the untyped `sql::<UInt64>("?")` escape hatch.
@@ -103,7 +105,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.8.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.9.0
 [0.8.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.8.0
 [0.7.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.7.0
 [0.6.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.6.0
