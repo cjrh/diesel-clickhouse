@@ -1512,3 +1512,55 @@ fn renders_settings() {
         "SELECT `events`.`id` FROM `events` SETTINGS max_threads = 4, readonly"
     );
 }
+
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    counters (id) {
+        id -> UInt64,
+        shard -> UInt32,
+    }
+}
+
+// `bind` lets a Rust `u64`/`u32` be compared against a ClickHouse unsigned column
+// without the untyped `sql::<UInt64>("?")` escape hatch. The target SQL type is
+// inferred from the column, so no turbofish is needed, and each value renders as
+// a real `?` bind parameter.
+#[test]
+fn renders_bind_against_clickhouse_unsigned_columns() {
+    use diesel_clickhouse::bind;
+
+    let after_id: u64 = 42;
+    let shard: u32 = 7;
+    let query = counters::table
+        .filter(counters::id.gt(bind(after_id)))
+        .filter(counters::shard.eq(bind(shard)))
+        .select(counters::id);
+
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT `counters`.`id` FROM `counters` WHERE ((`counters`.`id` > ?) AND (`counters`.`shard` = ?))"
+    );
+}
+
+// `when(enabled, predicate)` renders the predicate when enabled and the
+// always-true constant `1` (binding nothing) when disabled, giving an optional
+// filter on a backend that does not support boxed queries.
+#[test]
+fn renders_when_optional_filter() {
+    use self::events::dsl::*;
+    use diesel_clickhouse::when;
+
+    let enabled = events.filter(when(true, tenant_id.eq("acme"))).select(id);
+    assert_eq!(
+        to_sql(&enabled).unwrap(),
+        "SELECT `events`.`id` FROM `events` WHERE (`events`.`tenant_id` = ?)"
+    );
+
+    let disabled = events.filter(when(false, tenant_id.eq("acme"))).select(id);
+    assert_eq!(
+        to_sql(&disabled).unwrap(),
+        "SELECT `events`.`id` FROM `events` WHERE 1"
+    );
+}

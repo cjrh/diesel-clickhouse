@@ -12,9 +12,9 @@ error[E0277]: the trait bound `f64: Expression` is not satisfied
             AliasedColumn<C>
             AliasedField<S, C>
             BinaryParametricAggregate<Left, Right, ST>
+            BoundValue<ST, T>
             Box<T>
             CaseWhen<expression::case_when::non_public_types::CaseWhenConditionsIntermediateNode<W, T, Whens>, E>
-            CaseWhen<expression::case_when::non_public_types::CaseWhenConditionsLeaf<W, T>, expression::case_when::non_public_types::ElseExpression<E>>
           and $N others
 note: required by a bound in `AggregateBuilder::<ST>::arg`
  --> src/aggregates.rs

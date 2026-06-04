@@ -26,6 +26,9 @@ For the model behind these recipes (execution modes, the safety trade-offs of `s
 | `any(col)` | `any_value(col)` |
 | `quantile(0.95)(col)` | `quantile(0.95, col)` |
 | `expr AS name` | `expr_as(expr, "name")` |
+| `t.unsigned_col > 42` | `t::unsigned_col.gt(bind(42u64))` |
+| `optional WHERE col = v` | `when(flag, t::col.eq(v))` |
+| `{name:Type} (stable SQL text)` | `sql::<T>("{name:Type}") + .param(..)` |
 | `bare t.col from a custom source` | `source_column(t::col)` |
 | `FORMAT JSONEachRow` | `.format(Format::JsonEachRow)` |
 
@@ -84,6 +87,176 @@ Both the ClickHouse SQL and the Diesel query above return the same rows:
         "acme",
     ),
 ]
+```
+
+
+### Bind a Rust value to a ClickHouse-only column type
+
+`cookbook_events.id` is a `UInt64`. Diesel cannot bind a bare `u64` against ClickHouse's unsigned types — its blanket `AsExpression` impl makes a hand-written one a coherence conflict in every crate — so `id.gt(after)` does not compile and you would otherwise reach for the untyped `sql::<UInt64>("?")`. `bind(value)` wraps the value as a typed parameter instead: the target SQL type is inferred from the column, the value is type-checked against it, and it renders as a real `?` bind.
+
+ClickHouse SQL:
+
+```sql
+SELECT id, tenant_id FROM cookbook_events WHERE id > 2 AND id <= 5 ORDER BY id
+```
+
+Diesel:
+
+```rust,ignore
+use diesel_clickhouse::bind;
+
+let after: u64 = 2;
+let through: u64 = 5;
+let rows: Vec<(u64, String)> = events::table
+    // `events::id` is a `UInt64`; `bind` types each value against it.
+    .filter(events::id.gt(bind(after)))
+    .filter(events::id.le(bind(through)))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;
+```
+
+Rendered by `diesel-clickhouse`:
+
+```sql
+SELECT `cookbook_events`.`id`, `cookbook_events`.`tenant_id` FROM `cookbook_events` WHERE ((`cookbook_events`.`id` > ?) AND (`cookbook_events`.`id` <= ?)) ORDER BY `cookbook_events`.`id` ASC
+```
+
+Both the ClickHouse SQL and the Diesel query above return the same rows:
+
+```text
+[
+    (
+        3,
+        "acme",
+    ),
+    (
+        4,
+        "beta",
+    ),
+    (
+        5,
+        "beta",
+    ),
+]
+```
+
+
+### Optional filters with `when(...)`
+
+On most backends an optional filter is added by boxing the query, but the ClickHouse backend does not support `.into_boxed()`. `when(enabled, predicate)` covers the gap: when `enabled` is true the predicate renders normally; when it is false the node renders the always-true constant `1`, so the filter contributes nothing and binds nothing. This replaces the `(? = '' OR col = ?)` sentinel trick — the value is referenced once and stays fully typed. (`when` renders different SQL per branch; if you need the SQL *text* to stay identical across calls — for ClickHouse's query cache or a parameterized view — see the named-parameter recipe next.)
+
+ClickHouse SQL:
+
+```sql
+SELECT id, tenant_id FROM cookbook_events WHERE tenant_id = 'acme' ORDER BY id
+```
+
+Diesel:
+
+```rust,ignore
+use diesel_clickhouse::when;
+
+let tenant = "acme"; // an empty value disables the filter
+let rows: Vec<(u64, String)> = events::table
+    .filter(when(!tenant.is_empty(), events::tenant_id.eq(tenant)))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;
+```
+
+Rendered by `diesel-clickhouse`:
+
+```sql
+SELECT `cookbook_events`.`id`, `cookbook_events`.`tenant_id` FROM `cookbook_events` WHERE (`cookbook_events`.`tenant_id` = ?) ORDER BY `cookbook_events`.`id` ASC
+```
+
+Both the ClickHouse SQL and the Diesel query above return the same rows:
+
+```text
+[
+    (
+        1,
+        "acme",
+    ),
+    (
+        2,
+        "acme",
+    ),
+    (
+        3,
+        "acme",
+    ),
+]
+```
+
+With an empty `tenant` the predicate disables itself — the same query renders the filter as the constant `1`, so every row matches and no value is bound:
+
+```sql
+SELECT `cookbook_events`.`id`, `cookbook_events`.`tenant_id` FROM `cookbook_events` WHERE 1 ORDER BY `cookbook_events`.`id` ASC
+```
+
+
+### Stable SQL text with ClickHouse named parameters
+
+When the SQL string must stay byte-for-byte identical across calls — so ClickHouse's query cache hits, or a parameterized view sees one query — use a ClickHouse named parameter (`{name:Type}`). It can be referenced many times in the text but is bound once with the client's `.param(...)`, which makes it a tidy fit for the optional-filter sentinel: an empty value leaves `'' = ''` true and disables the filter, a non-empty value enforces it, and the SQL text never changes. The `{name:Type}` string is raw, so its contents are unchecked; `to_sql_with_metadata(...).named_parameters()` reports the names so a test can assert your `.param(...)` calls line up.
+
+ClickHouse SQL:
+
+```sql
+SELECT id, tenant_id FROM cookbook_events WHERE ({tenant:String} = '' OR tenant_id = {tenant:String}) ORDER BY id
+```
+
+Diesel:
+
+```rust,ignore
+use diesel::dsl::sql;
+use diesel::sql_types::Bool;
+use diesel_clickhouse::to_sql_with_metadata;
+
+// `{tenant:String}` appears twice in the text but is bound once, so the SQL
+// string is identical for every tenant (and "" disables the filter).
+let query = events::table
+    .select((events::id, events::tenant_id))
+    .filter(sql::<Bool>("({tenant:String} = '' OR tenant_id = {tenant:String})"))
+    .order(events::id.asc());
+
+let rendered = to_sql_with_metadata(&query)?;
+assert_eq!(rendered.named_parameters(), &["tenant"]);
+
+let rows: Vec<(u64, String)> = client
+    .query(&rendered.sql)
+    .param("tenant", "acme") // bind once by name; "" matches all rows
+    .fetch_all().await?;
+```
+
+Rendered by `diesel-clickhouse`:
+
+```sql
+SELECT `cookbook_events`.`id`, `cookbook_events`.`tenant_id` FROM `cookbook_events` WHERE ({tenant:String} = '' OR tenant_id = {tenant:String}) ORDER BY `cookbook_events`.`id` ASC
+```
+
+Output from this run:
+
+```text
+named parameters: ["tenant"]
+
+tenant = "acme" -> [
+    (
+        1,
+        "acme",
+    ),
+    (
+        2,
+        "acme",
+    ),
+    (
+        3,
+        "acme",
+    ),
+]
+
+tenant = "" matches all 6 rows
 ```
 
 

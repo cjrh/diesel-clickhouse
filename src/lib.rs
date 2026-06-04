@@ -69,6 +69,7 @@
 
 mod aggregates;
 mod backend;
+mod bind;
 mod cast;
 mod clauses;
 mod connection;
@@ -81,6 +82,7 @@ mod joins;
 mod json;
 mod operators;
 mod ordering;
+mod predicate;
 mod serialize;
 mod types;
 mod vectors;
@@ -97,6 +99,7 @@ pub use backend::{
     ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, RenderedSql, RenderedSqlMetadata,
     analyze_rendered_sql, to_sql, to_sql_with_metadata,
 };
+pub use bind::{BoundValue, bind};
 pub use cast::{
     CastFunction, accurate_cast, accurate_cast_or_default, accurate_cast_or_null, cast,
 };
@@ -181,6 +184,7 @@ pub use operators::{
     NotILike,
 };
 pub use ordering::{FillBound, NoFillBound, WithFill, with_fill};
+pub use predicate::{When, when};
 pub use vectors::{
     VectorBytes, VectorBytesEncoding, VectorLiteral, vector_f32, vector_f32_binary, vector_f32_hex,
     vector_f32_le_bytes, vector_f32_le_hex, vector_f64, vector_f64_binary, vector_f64_hex,
