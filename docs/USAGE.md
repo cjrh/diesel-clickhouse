@@ -99,7 +99,7 @@ For ClickHouse array parameters, use this crate's typed `bind` wrapper so the ve
 ```rust,ignore
 use diesel::dsl::sql;
 use diesel::sql_types::{Bool, Text};
-use diesel_clickhouse::bind;
+use diesel_clickhouse::{array_exists2, bind, lambda2};
 use diesel_clickhouse::sql_types::{Array, UInt64};
 
 type TurnIds = Array<UInt64>;
@@ -112,19 +112,20 @@ let by_turn = sql::<Bool>("has(")
 type TextArray = Array<Text>;
 let allowed_types = vec!["question".to_owned(), "answer".to_owned()];
 let allowed_roles = vec!["user".to_owned(), "assistant".to_owned()];
-let allowed_pair = sql::<Bool>(
-    "arrayExists((allowed_type, allowed_role) -> \
-     allowed_type = aspect_type AND allowed_role = speaker_role, ",
-)
-.bind::<TextArray, _>(bind::<TextArray, _>(allowed_types))
-.sql(", ")
-.bind::<TextArray, _>(bind::<TextArray, _>(allowed_roles))
-.sql(")");
+let allowed_pair = array_exists2(
+    lambda2(
+        "allowed_type",
+        "allowed_role",
+        "allowed_type = aspect_type AND allowed_role = speaker_role",
+    ),
+    bind::<TextArray, _>(allowed_types),
+    bind::<TextArray, _>(allowed_roles),
+);
 ```
 
 Prefer `when(enabled, predicate)` for optional filters when stable SQL text is not required: disabled branches render `1` and contribute no bind values, so later binds such as `LIMIT ?` keep their intended positions.
 
-Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, and `if_`. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier.
+Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, `if_`, and `array_exists2` for two parallel arrays. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier.
 
 ### Loading structs and wide rows
 

@@ -22,8 +22,9 @@ use diesel::prelude::*;
 // async connection's `.load`/`.first` resolve unambiguously.
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
-    ClickHouseConnectionOptions, ClickHouseJoinDsl, alias_ref, bind, clickhouse, count, count_if,
-    expr_as, final_table, has, source_column, to_sql, to_sql_with_metadata, when,
+    ClickHouseConnectionOptions, ClickHouseJoinDsl, alias_ref, array_exists2, bind, clickhouse,
+    count, count_if, expr_as, final_table, has, lambda2, source_column, to_sql,
+    to_sql_with_metadata, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -475,8 +476,8 @@ async fn main() -> Result<()> {
         "`AsyncClickHouseConnection` can carry Diesel-collected array values, so \
          membership filters and higher-order array predicates do not need \
          external `.param(...)` calls. Use `bind::<Array<T>, _>(vec)` for a typed \
-         array expression, or embed that bound expression inside a raw fragment \
-         when the surrounding ClickHouse lambda is not modeled by Diesel yet.",
+         array expression; `array_exists2(lambda2(...), left, right)` covers the \
+         common parallel-array predicate shape.",
     );
     doc.sql(R_ARRAY_PARAM_SQL);
     doc.diesel(R_ARRAY_PARAM_RUST);
@@ -499,22 +500,15 @@ async fn main() -> Result<()> {
     doc.shared_output(&parity(&orm, &raw));
 
     let allowed_pair_rows: Vec<u64> = events::table
-        .filter(
-            diesel::dsl::sql::<diesel::sql_types::Bool>(
-                "arrayExists((allowed_tenant, allowed_status) -> \
-                 allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail'), ",
-            )
-            .bind::<TextArray, _>(bind::<TextArray, _>(vec![
-                "acme".to_owned(),
-                "beta".to_owned(),
-            ]))
-            .sql(", ")
-            .bind::<TextArray, _>(bind::<TextArray, _>(vec![
-                "ok".to_owned(),
-                "fail".to_owned(),
-            ]))
-            .sql(")"),
-        )
+        .filter(array_exists2(
+            lambda2(
+                "allowed_tenant",
+                "allowed_status",
+                "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+            ),
+            bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]),
+            bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]),
+        ))
         .select(events::id)
         .order(events::id.asc())
         .load(&mut conn)
@@ -1107,9 +1101,8 @@ let rows: Vec<(u64, String)> = events::table
 const R_ARRAY_PARAM_SQL: &str = "SELECT id, tenant_id FROM cookbook_events \
 WHERE has(CAST([1, 4], 'Array(UInt64)'), id) ORDER BY id";
 
-const R_ARRAY_PARAM_RUST: &str = r#"use diesel::dsl::sql;
-use diesel::sql_types::{Bool, Text};
-use diesel_clickhouse::{bind, has};
+const R_ARRAY_PARAM_RUST: &str = r#"use diesel::sql_types::Text;
+use diesel_clickhouse::{array_exists2, bind, has, lambda2};
 use diesel_clickhouse::sql_types::{Array, UInt64};
 
 type EventIds = Array<UInt64>;
@@ -1121,16 +1114,16 @@ let rows: Vec<(u64, String)> = events::table
 
 // Parallel string arrays for ClickHouse's higher-order `arrayExists` lambda.
 type TextArray = Array<Text>;
-let allowed = sql::<Bool>(
-    "arrayExists((allowed_tenant, allowed_status) -> \
-     allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail'), ",
-)
-.bind::<TextArray, _>(bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]))
-.sql(", ")
-.bind::<TextArray, _>(bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]))
-.sql(")");
 let allowed_ids: Vec<u64> = events::table
-    .filter(allowed)
+    .filter(array_exists2(
+        lambda2(
+            "allowed_tenant",
+            "allowed_status",
+            "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+        ),
+        bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]),
+        bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]),
+    ))
     .select(events::id)
     .order(events::id.asc())
     .load(&mut conn).await?;"#;

@@ -165,8 +165,9 @@ pub use grouping::{
     grouping, grouping_sets, rollup, with_totals,
 };
 pub use higher_order::{
-    HigherOrderFunction, Lambda, array_all, array_count, array_exists, array_filter, array_map,
-    array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
+    BinaryHigherOrderFunction, HigherOrderFunction, Lambda, array_all, array_count, array_exists,
+    array_exists2, array_filter, array_map, array_map_as, lambda, lambda_params, lambda2,
+    map_apply, map_filter,
 };
 pub use joins::{
     AliasedColumn, ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind,

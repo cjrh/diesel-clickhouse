@@ -100,7 +100,7 @@ Legend:
 | ✅ | `GLOBAL IN` | `tenant_id.global_in(subquery)` |
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
 | ✅ 🧪 | Regular comparison/logical operators | Diesel `.eq()`, `.gt()`, `.and()`, `.or()` built-ins. |
-| ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
+| ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers, including two-array `array_exists2`. |
 | ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()` ClickHouse `.ilike()` / `.not_ilike()` `like`, `like_escape`, `ilike`, `not_ilike` `regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*` |
 
 ## Scalar functions
@@ -109,7 +109,7 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ 🧪 | Date/time conversion and bucketing | `to_date` `to_date_time` `to_date_time64` `to_start_of_*` `date_diff` `date_trunc` `to_year` `to_month` `to_hour` | intervals, timezone variants, `now*`, `parseDateTime*` |
 | ✅ 🧪 | Conditional/basic/numeric helpers | `if_`, `length`, `empty`, `not_empty`, `int_div`, `abs`, `round`, `floor`, `ceil`, `least`, `greatest` | `multiIf`, `coalesce`, `assumeNotNull` |
-| ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_all` `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
+| ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_exists2` `array_all` `array_count` | `array_exists2(lambda2(...), left, right)` covers parallel-array filters while keeping both arrays as Diesel expressions/binds. More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
 | ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
 | ✅ 🧪 | Strings | `lower` `upper` `substring` `left_utf8` `length_utf8` `position` `position_case_insensitive` `replace_all` `concat` `null_if` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |

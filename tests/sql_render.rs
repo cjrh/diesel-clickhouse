@@ -5,10 +5,10 @@ use diesel_clickhouse::{
     VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
     accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree, alias_ref,
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
-    approx_top_sum_with_reserved, array_all, array_count, array_exists, array_filter, array_map,
-    avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, cast, ceil,
-    city_hash64, collapsing_merge_tree, concat, corr, cosine_distance, count, count_if,
-    count_merge, count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp,
+    approx_top_sum_with_reserved, array_all, array_count, array_exists, array_exists2,
+    array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode,
+    buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat, corr, cosine_distance, count,
+    count_if, count_merge, count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp,
     covar_samp_stable, create_materialized_view, create_table, cube, cut_query_string, date_diff,
     dense_rank, distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array_merge,
@@ -558,6 +558,7 @@ fn renders_higher_order_array_and_map_functions() {
         array_exists(lambda("tag", "tag = 'paid'"), tags),
         array_all(lambda("tag", "notEmpty(tag)"), tags),
         array_count(lambda("tag", "tag = 'paid'"), tags),
+        array_exists2(lambda2("tag", "key", "tag = key"), tags, map_keys(attrs)),
     ));
     let map_query = events.select((
         map_filter(lambda2("k", "v", "k = 'country'"), attrs),
@@ -567,11 +568,27 @@ fn renders_higher_order_array_and_map_functions() {
 
     assert_eq!(
         to_sql(&array_query).unwrap(),
-        "SELECT arrayMap(tag -> lower(tag), `events`.`tags`), arrayFilter(tag -> tag != '', `events`.`tags`), arrayExists(tag -> tag = 'paid', `events`.`tags`), arrayAll(tag -> notEmpty(tag), `events`.`tags`), arrayCount(tag -> tag = 'paid', `events`.`tags`) FROM `events`"
+        "SELECT arrayMap(tag -> lower(tag), `events`.`tags`), arrayFilter(tag -> tag != '', `events`.`tags`), arrayExists(tag -> tag = 'paid', `events`.`tags`), arrayAll(tag -> notEmpty(tag), `events`.`tags`), arrayCount(tag -> tag = 'paid', `events`.`tags`), arrayExists((tag, key) -> tag = key, `events`.`tags`, mapKeys(`events`.`attrs`)) FROM `events`"
     );
     assert_eq!(
         to_sql(&map_query).unwrap(),
         "SELECT mapFilter((k, v) -> k = 'country', `events`.`attrs`), mapApply((k, v) -> (k, upper(v)), `events`.`attrs`), mapFromArrays(mapKeys(`events`.`attrs`), mapValues(`events`.`attrs`)) FROM `events`"
+    );
+}
+
+#[test]
+fn array_exists2_requires_two_parameter_lambda() {
+    use self::events::dsl::*;
+
+    let query = events.select(array_exists2(
+        lambda("tag", "tag = 'paid'"),
+        tags,
+        map_keys(attrs),
+    ));
+    let err = to_sql(&query).unwrap_err();
+    assert!(
+        err.to_string().contains("two-parameter lambda"),
+        "unexpected error: {err}"
     );
 }
 

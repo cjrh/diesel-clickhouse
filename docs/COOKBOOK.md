@@ -572,7 +572,7 @@ Both the ClickHouse SQL and the Diesel query above return the same rows:
 
 ### Array parameters through async execution
 
-`AsyncClickHouseConnection` can carry Diesel-collected array values, so membership filters and higher-order array predicates do not need external `.param(...)` calls. Use `bind::<Array<T>, _>(vec)` for a typed array expression, or embed that bound expression inside a raw fragment when the surrounding ClickHouse lambda is not modeled by Diesel yet.
+`AsyncClickHouseConnection` can carry Diesel-collected array values, so membership filters and higher-order array predicates do not need external `.param(...)` calls. Use `bind::<Array<T>, _>(vec)` for a typed array expression; `array_exists2(lambda2(...), left, right)` covers the common parallel-array predicate shape.
 
 ClickHouse SQL:
 
@@ -583,9 +583,8 @@ SELECT id, tenant_id FROM cookbook_events WHERE has(CAST([1, 4], 'Array(UInt64)'
 Diesel:
 
 ```rust,ignore
-use diesel::dsl::sql;
-use diesel::sql_types::{Bool, Text};
-use diesel_clickhouse::{bind, has};
+use diesel::sql_types::Text;
+use diesel_clickhouse::{array_exists2, bind, has, lambda2};
 use diesel_clickhouse::sql_types::{Array, UInt64};
 
 type EventIds = Array<UInt64>;
@@ -597,16 +596,16 @@ let rows: Vec<(u64, String)> = events::table
 
 // Parallel string arrays for ClickHouse's higher-order `arrayExists` lambda.
 type TextArray = Array<Text>;
-let allowed = sql::<Bool>(
-    "arrayExists((allowed_tenant, allowed_status) -> \
-     allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail'), ",
-)
-.bind::<TextArray, _>(bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]))
-.sql(", ")
-.bind::<TextArray, _>(bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]))
-.sql(")");
 let allowed_ids: Vec<u64> = events::table
-    .filter(allowed)
+    .filter(array_exists2(
+        lambda2(
+            "allowed_tenant",
+            "allowed_status",
+            "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+        ),
+        bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]),
+        bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]),
+    ))
     .select(events::id)
     .order(events::id.asc())
     .load(&mut conn).await?;

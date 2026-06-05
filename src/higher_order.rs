@@ -3,7 +3,9 @@
 use std::marker::PhantomData;
 
 use diesel::backend::Backend;
-use diesel::expression::{AppearsOnTable, Expression, SelectableExpression, ValidGrouping};
+use diesel::expression::{
+    AppearsOnTable, Expression, MixedAggregates, SelectableExpression, ValidGrouping,
+};
 use diesel::query_builder::{AstPass, QueryFragment, QueryId};
 use diesel::result::{Error, QueryResult};
 use diesel::sql_types::{BigInt, Bool, SingleValue, SqlType};
@@ -53,6 +55,16 @@ pub struct HigherOrderFunction<Expr, ST> {
     _sql_type: PhantomData<ST>,
 }
 
+/// A higher-order function call of the shape `function(lambda, first, second)`.
+#[derive(Debug, Clone)]
+pub struct BinaryHigherOrderFunction<First, Second, ST> {
+    function: &'static str,
+    lambda: Lambda,
+    first: First,
+    second: Second,
+    _sql_type: PhantomData<ST>,
+}
+
 /// Render `arrayMap(lambda, array)` returning the same array type as the input.
 pub fn array_map<Expr>(lambda: Lambda, array: Expr) -> HigherOrderFunction<Expr, Expr::SqlType>
 where
@@ -86,6 +98,24 @@ where
     Expr: Expression,
 {
     HigherOrderFunction::new("arrayExists", lambda, array)
+}
+
+/// Render `arrayExists(lambda, first, second)` over two parallel arrays.
+///
+/// ClickHouse evaluates the two-parameter lambda once for each aligned pair of
+/// elements and returns true if any pair matches. This keeps the array values as
+/// ordinary Diesel expressions/binds while avoiding hand-written function-call
+/// assembly around the lambda.
+pub fn array_exists2<First, Second>(
+    lambda: Lambda,
+    first: First,
+    second: Second,
+) -> BinaryHigherOrderFunction<First, Second, Bool>
+where
+    First: Expression,
+    Second: Expression,
+{
+    BinaryHigherOrderFunction::new("arrayExists", lambda, first, second)
 }
 
 /// Render `arrayAll(lambda, array)`.
@@ -133,6 +163,18 @@ impl<Expr, ST> HigherOrderFunction<Expr, ST> {
     }
 }
 
+impl<First, Second, ST> BinaryHigherOrderFunction<First, Second, ST> {
+    fn new(function: &'static str, lambda: Lambda, first: First, second: Second) -> Self {
+        Self {
+            function,
+            lambda,
+            first,
+            second,
+            _sql_type: PhantomData,
+        }
+    }
+}
+
 impl<Expr, ST> Expression for HigherOrderFunction<Expr, ST>
 where
     ST: SqlType + SingleValue,
@@ -147,6 +189,15 @@ where
     type IsAggregate = Expr::IsAggregate;
 }
 
+impl<First, Second, ST, GB> ValidGrouping<GB> for BinaryHigherOrderFunction<First, Second, ST>
+where
+    First: ValidGrouping<GB>,
+    Second: ValidGrouping<GB>,
+    First::IsAggregate: MixedAggregates<Second::IsAggregate>,
+{
+    type IsAggregate = <First::IsAggregate as MixedAggregates<Second::IsAggregate>>::Output;
+}
+
 impl<Expr, ST, QS> AppearsOnTable<QS> for HigherOrderFunction<Expr, ST>
 where
     Expr: AppearsOnTable<QS>,
@@ -159,7 +210,34 @@ impl<Expr, ST, QS> SelectableExpression<QS> for HigherOrderFunction<Expr, ST> wh
 {
 }
 
+impl<First, Second, ST> Expression for BinaryHigherOrderFunction<First, Second, ST>
+where
+    ST: SqlType + SingleValue,
+{
+    type SqlType = ST;
+}
+
+impl<First, Second, ST, QS> AppearsOnTable<QS> for BinaryHigherOrderFunction<First, Second, ST>
+where
+    First: AppearsOnTable<QS>,
+    Second: AppearsOnTable<QS>,
+    Self: Expression,
+{
+}
+
+impl<First, Second, ST, QS> SelectableExpression<QS>
+    for BinaryHigherOrderFunction<First, Second, ST>
+where
+    Self: AppearsOnTable<QS>,
+{
+}
+
 impl<Expr, ST> QueryId for HigherOrderFunction<Expr, ST> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<First, Second, ST> QueryId for BinaryHigherOrderFunction<First, Second, ST> {
     type QueryId = ();
     const HAS_STATIC_QUERY_ID: bool = false;
 }
@@ -209,6 +287,36 @@ where
         self.lambda.walk_ast(out.reborrow())?;
         out.push_sql(", ");
         self.expr.walk_ast(out.reborrow())?;
+        out.push_sql(")");
+        Ok(())
+    }
+}
+
+impl<First, Second, ST, DB> QueryFragment<DB> for BinaryHigherOrderFunction<First, Second, ST>
+where
+    DB: Backend,
+    Lambda: QueryFragment<DB>,
+    First: QueryFragment<DB>,
+    Second: QueryFragment<DB>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, DB>) -> QueryResult<()> {
+        if self.lambda.params.len() != 2 {
+            return Err(Error::QueryBuilderError(
+                format!(
+                    "ClickHouse {} over two arrays requires a two-parameter lambda",
+                    self.function
+                )
+                .into(),
+            ));
+        }
+
+        out.push_sql(self.function);
+        out.push_sql("(");
+        self.lambda.walk_ast(out.reborrow())?;
+        out.push_sql(", ");
+        self.first.walk_ast(out.reborrow())?;
+        out.push_sql(", ");
+        self.second.walk_ast(out.reborrow())?;
         out.push_sql(")");
         Ok(())
     }
