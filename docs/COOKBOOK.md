@@ -751,7 +751,7 @@ Both the ClickHouse SQL and the Diesel query above return the same rows:
 
 ### Named struct result mapping
 
-For typed projections, derive `Queryable` and keep the struct fields in select-list order. For raw SQL or heavily aliased rows, derive `QueryableByName` and annotate each field with the ClickHouse/Diesel SQL type. Both forms load through `AsyncClickHouseConnection`, so bind values still stay Diesel-owned.
+For typed projections, derive `Queryable` and keep the struct fields in select-list order. For raw SQL or heavily aliased rows, derive `QueryableByName` and annotate each field with the ClickHouse/Diesel SQL type. Existing `clickhouse::Row` read structs can use `load_clickhouse_rows(...)` as a migration bridge. All forms execute through `AsyncClickHouseConnection`, so bind values still stay Diesel-owned.
 
 Diesel:
 
@@ -791,6 +791,22 @@ let hits: Vec<DocumentHit> = diesel::sql_query(
 )
 .bind::<diesel::sql_types::Text, _>("acme")
 .load(&mut conn).await?;
+
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+struct DocumentHitRow {
+    id: u64,
+    text: String,
+}
+
+let row_bridge_hits: Vec<DocumentHitRow> = conn
+    .load_clickhouse_rows(
+        documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((documents::id, documents::text))
+            .order(documents::id.asc())
+            .limit(2_i64),
+    )
+    .await?;
 ```
 
 Output from this run:
@@ -829,6 +845,17 @@ raw/aliased document rows: [
             0.2,
             0.8,
         ],
+    },
+]
+
+clickhouse::Row bridge rows: [
+    DocumentHitRow {
+        id: 1,
+        text: "Rust ? async guide",
+    },
+    DocumentHitRow {
+        id: 2,
+        text: "ClickHouse diesel notes",
     },
 ]
 ```

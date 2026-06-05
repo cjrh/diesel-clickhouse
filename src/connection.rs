@@ -259,6 +259,27 @@ impl AsyncClickHouseConnection {
         &self.client
     }
 
+    /// Execute a Diesel-built read query and decode rows with the `clickhouse`
+    /// crate's `Row` derive.
+    ///
+    /// This is a migration bridge for code that already has
+    /// `#[derive(clickhouse::Row, serde::Deserialize)]` read structs. The query
+    /// is still rendered and parameterized by `AsyncClickHouseConnection`, so
+    /// Diesel owns the bind values; only the response decoding switches from
+    /// Diesel's `Queryable`/`QueryableByName` traits to ClickHouse RowBinary.
+    /// Prefer ordinary `diesel_async::RunQueryDsl::load` for new Diesel-first
+    /// code, and use this when it materially reduces migration boilerplate.
+    pub async fn load_clickhouse_rows<Row, T>(&mut self, source: T) -> QueryResult<Vec<Row>>
+    where
+        T: AsQuery,
+        T::Query: QueryFragment<ClickHouse> + QueryId,
+        Row: clickhouse::RowOwned + clickhouse::RowRead,
+    {
+        let query = source.as_query();
+        let prepared = self.render_query(&query)?;
+        self.load_clickhouse_rows_prepared(prepared).await
+    }
+
     /// Insert many rows in a single columnar RowBinary request, returning the
     /// number of rows sent.
     ///
@@ -423,6 +444,38 @@ impl AsyncClickHouseConnection {
         .await;
 
         let result = result.and_then(|bytes| parse_rows(&bytes));
+        self.instrumentation
+            .on_connection_event(InstrumentationEvent::finish_query(
+                &query,
+                result.as_ref().err(),
+            ));
+        result
+    }
+
+    async fn load_clickhouse_rows_prepared<Row>(
+        &mut self,
+        prepared: PreparedQuery,
+    ) -> QueryResult<Vec<Row>>
+    where
+        Row: clickhouse::RowOwned + clickhouse::RowRead,
+    {
+        let query = StrQueryHelper::new(&prepared.sql);
+        self.instrumentation
+            .on_connection_event(InstrumentationEvent::start_query(&query));
+
+        let client_sql = escape_clickhouse_client_template(&prepared.sql);
+        let result = async {
+            let mut http_query = self.client.query(&client_sql);
+            for (name, value) in prepared.params {
+                http_query = http_query.with_setting(name, value);
+            }
+            http_query
+                .fetch_all::<Row>()
+                .await
+                .map_err(clickhouse_error)
+        }
+        .await;
+
         self.instrumentation
             .on_connection_event(InstrumentationEvent::finish_query(
                 &query,

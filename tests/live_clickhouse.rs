@@ -375,6 +375,13 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             row_variant: String,
         }
 
+        #[derive(Debug, PartialEq, clickhouse::Row, serde::Deserialize)]
+        struct ClickHouseDocumentScore {
+            id: u32,
+            text: String,
+            score: f32,
+        }
+
         #[derive(Debug, PartialEq, QueryableByName)]
         struct ConnectionWideNamedRow {
             #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
@@ -871,6 +878,46 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .load(&mut conn)
             .await?;
         assert_eq!(vector_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+
+        let row_bridge_scores: Vec<ClickHouseDocumentScore> = conn
+            .load_clickhouse_rows(
+                gold_documents::table
+                    .filter(gold_documents::tenant_id.eq("acme"))
+                    .select((
+                        gold_documents::id,
+                        gold_documents::text,
+                        expr_as(
+                            vector_dot_product_f32(
+                                gold_documents::embedding,
+                                diesel_clickhouse::bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]),
+                            ),
+                            "score",
+                        ),
+                    ))
+                    .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+                    .then_order_by(gold_documents::id.asc()),
+            )
+            .await?;
+        assert_eq!(
+            row_bridge_scores,
+            vec![
+                ClickHouseDocumentScore {
+                    id: 1,
+                    text: "Rust ? async guide".to_string(),
+                    score: 1.0,
+                },
+                ClickHouseDocumentScore {
+                    id: 4,
+                    text: "rust diesel clickhouse".to_string(),
+                    score: 0.9,
+                },
+                ClickHouseDocumentScore {
+                    id: 2,
+                    text: "ClickHouse diesel notes".to_string(),
+                    score: 0.2,
+                },
+            ]
+        );
         diesel::sql_query("DROP TABLE diesel_clickhouse_gold_documents")
             .execute(&mut conn)
             .await?;

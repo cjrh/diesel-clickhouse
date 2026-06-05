@@ -178,6 +178,8 @@ let rows: Vec<TenantOverview> = events::table
 
 For raw SQL, aliased expressions, or very wide result shapes, use `diesel::sql_query(...)` plus `QueryableByName` and annotate each field with its SQL type. This avoids Diesel's tuple arity pressure for 17+ column analytics rows and makes aliases explicit. The live test suite covers a 16-column `QueryableByName` row with `String`, `UInt64`, `UInt32`, `Nullable(Int32)`, `Float32`, `UUID`, `DateTime64`, and `Array(Float32)` fields.
 
+If you already have read structs derived for the `clickhouse` crate, `conn.load_clickhouse_rows(query).await` is a migration bridge: Diesel still builds the SQL and owns the bind values, while the response is decoded with `#[derive(clickhouse::Row, serde::Deserialize)]` through RowBinary. Prefer normal `.load::<T>(&mut conn)` for new Diesel-first code; use the bridge to reduce churn for existing row structs.
+
 ```rust,ignore
 #[derive(QueryableByName)]
 struct DocumentHit {

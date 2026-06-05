@@ -624,8 +624,10 @@ async fn main() -> Result<()> {
         "For typed projections, derive `Queryable` and keep the struct fields in \
          select-list order. For raw SQL or heavily aliased rows, derive \
          `QueryableByName` and annotate each field with the ClickHouse/Diesel SQL \
-         type. Both forms load through `AsyncClickHouseConnection`, so bind values \
-         still stay Diesel-owned.",
+         type. Existing `clickhouse::Row` read structs can use \
+         `load_clickhouse_rows(...)` as a migration bridge. All forms execute \
+         through `AsyncClickHouseConnection`, so bind values still stay \
+         Diesel-owned.",
     );
     doc.diesel(R_STRUCT_RUST);
     #[derive(Debug, PartialEq, Queryable)]
@@ -645,6 +647,11 @@ async fn main() -> Result<()> {
         #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
         embedding: Vec<f32>,
     }
+    #[derive(Debug, PartialEq, clickhouse::Row, serde::Deserialize)]
+    struct DocumentHitRow {
+        id: u64,
+        text: String,
+    }
     let overview: Vec<TenantOverview> = events::table
         .group_by(events::tenant_id)
         .select((
@@ -662,10 +669,20 @@ async fn main() -> Result<()> {
     .bind::<diesel::sql_types::Text, _>("acme")
     .load(&mut conn)
     .await?;
+    let row_bridge_hits: Vec<DocumentHitRow> = conn
+        .load_clickhouse_rows(
+            documents::table
+                .filter(documents::tenant_id.eq("acme"))
+                .select((documents::id, documents::text))
+                .order(documents::id.asc())
+                .limit(2_i64),
+        )
+        .await?;
     assert_eq!(overview.len(), 2);
     assert_eq!(hits.len(), 2);
+    assert_eq!(row_bridge_hits.len(), 2);
     doc.text_output(&format!(
-        "typed aggregate rows: {overview:#?}\n\nraw/aliased document rows: {hits:#?}"
+        "typed aggregate rows: {overview:#?}\n\nraw/aliased document rows: {hits:#?}\n\nclickhouse::Row bridge rows: {row_bridge_hits:#?}"
     ));
 
     // ----- Recipe: render-only path -----------------------------------------
@@ -1274,7 +1291,23 @@ let hits: Vec<DocumentHit> = diesel::sql_query(
      FROM cookbook_documents WHERE tenant_id = ? ORDER BY id LIMIT 2",
 )
 .bind::<diesel::sql_types::Text, _>("acme")
-.load(&mut conn).await?;"#;
+.load(&mut conn).await?;
+
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+struct DocumentHitRow {
+    id: u64,
+    text: String,
+}
+
+let row_bridge_hits: Vec<DocumentHitRow> = conn
+    .load_clickhouse_rows(
+        documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((documents::id, documents::text))
+            .order(documents::id.asc())
+            .limit(2_i64),
+    )
+    .await?;"#;
 
 const R_METADATA_RUST: &str = r#"use diesel_clickhouse::to_sql_with_metadata;
 
