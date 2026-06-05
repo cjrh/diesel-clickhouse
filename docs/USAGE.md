@@ -72,7 +72,57 @@ let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
     .await?;
 ```
 
-The current connection supports `establish`, explicit `ClickHouseConnectionOptions`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `BigDecimal` values with the `bigdecimal` feature, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It sends supported Diesel-collected bind values as ClickHouse HTTP server-side parameters; ambiguous cases such as `NULL` HTTP parameters and abstract composite metadata fall back to escaped literal inlining. Literal `?` characters inside SQL strings/comments are preserved.
+The current connection supports `establish`, `AsyncClickHouseConnection::with_client(client)`, explicit `ClickHouseConnectionOptions`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `BigDecimal` values with the `bigdecimal` feature, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It sends supported Diesel-collected bind values as ClickHouse HTTP server-side parameters; ambiguous cases such as `NULL` HTTP parameters and abstract composite metadata fall back to escaped literal inlining. Concrete array binds (`Array(UInt64)`, `Array(String)`, `Array(Float32)`) are serialized by the crate as typed ClickHouse array literals and sent through the same Diesel-owned bind path. Literal `?` characters inside SQL strings/comments are preserved.
+
+### Raw fragments and array binds under async execution
+
+Raw SQL is still sometimes necessary for ClickHouse-only grammar. When executing through `AsyncClickHouseConnection`, put bind values into the raw fragment with Diesel's literal binding API instead of writing a bare `?` and binding later through an external client:
+
+```rust,ignore
+use diesel::dsl::sql;
+use diesel::sql_types::{Bool, Text};
+
+let needle = "rust";
+let predicate = sql::<Bool>("positionCaseInsensitive(text, ")
+    .bind::<Text, _>(needle)
+    .sql(") > 0 AND text != '?' /* this ? is ignored */");
+
+let rows = documents::table
+    .filter(documents::tenant_id.eq("acme"))
+    .filter(predicate)
+    .load::<Document>(&mut conn)
+    .await?;
+```
+
+For ClickHouse array parameters, use this crate's typed `bind` wrapper so the vector is collected by Diesel and serialized by `diesel-clickhouse`:
+
+```rust,ignore
+use diesel::dsl::sql;
+use diesel::sql_types::{Bool, Text};
+use diesel_clickhouse::bind;
+use diesel_clickhouse::sql_types::{Array, UInt64};
+
+type TurnIds = Array<UInt64>;
+let turn_ids = vec![10_u64, 20, 30];
+
+let by_turn = sql::<Bool>("has(")
+    .bind::<TurnIds, _>(bind::<TurnIds, _>(turn_ids))
+    .sql(", toUInt64(silver_turn_id))");
+
+type TextArray = Array<Text>;
+let allowed_types = vec!["question".to_owned(), "answer".to_owned()];
+let allowed_roles = vec!["user".to_owned(), "assistant".to_owned()];
+let allowed_pair = sql::<Bool>(
+    "arrayExists((allowed_type, allowed_role) -> \
+     allowed_type = aspect_type AND allowed_role = speaker_role, ",
+)
+.bind::<TextArray, _>(bind::<TextArray, _>(allowed_types))
+.sql(", ")
+.bind::<TextArray, _>(bind::<TextArray, _>(allowed_roles))
+.sql(")");
+```
+
+Prefer `when(enabled, predicate)` for optional filters when stable SQL text is not required: disabled branches render `1` and contribute no bind values, so later binds such as `LIMIT ?` keep their intended positions.
 
 Enable native BigDecimal decimal values with:
 
@@ -105,6 +155,10 @@ let config = AsyncDieselConnectionManager::<AsyncClickHouseConnection>::new(data
 let pool = Pool::builder().build(config).await?;
 let mut conn = pool.get().await?;
 ```
+
+If you already have a configured `clickhouse::Client`, `AsyncClickHouseConnection::with_client(client)` wraps it without I/O and preserves URL, credentials, database, validation mode, and HTTP settings already applied to that client. Creating a short-lived connection per query from a cloned client is acceptable for ClickHouse HTTP while evaluating the need for a pool; use a `diesel_async` pool when you want checkout limits, shared lifecycle management, or framework integration rather than because the underlying client handle is expensive.
+
+Connection-level options (`ClickHouseConnectionOptions::option(...)` or `client.with_setting(...)`) become default HTTP settings on every request. SQL `SETTINGS` clauses are query text and should be used when the setting is semantically part of one statement.
 
 If you need to drive the connection from blocking/synchronous code (or run `diesel_migrations`), enable the `async-connection-wrapper` feature and wrap it in diesel-async's `AsyncConnectionWrapper`.
 

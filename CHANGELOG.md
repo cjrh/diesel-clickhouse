@@ -10,6 +10,17 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- Async connection support for Diesel-owned array binds in the Carson-critical shapes: `Vec<u64>`/`Array(UInt64)`, `Vec<String>`/`Array(String)`, and `Vec<f32>`/`Array(Float32)`, covered by live ClickHouse tests for membership filters, parallel-array `arrayExists`, and vector scoring.
+- Downstream async-connection implementation plan in `docs/ASYNC_CONNECTION_DOWNSTREAM_PLAN.md`.
+
+### Fixed
+- Added placeholder-mismatch tests for `AsyncClickHouseConnection` bind parameterization, covering both extra rendered placeholders and unused collected binds.
+- Added live coverage for raw SQL literal binds with repeated values and literal/comment `?` characters, plus `when(...)` optional predicates followed by a later `LIMIT` bind.
+
+### Documentation
+- Clarified async bind ownership, array bind usage, `with_client(...)`, pooling trade-offs, and connection-level settings versus SQL `SETTINGS` in the usage/design docs and feature matrix.
+
 ## [0.9.0] — 2026-06-04
 
 ### Added

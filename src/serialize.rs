@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::error::Error;
+use std::fmt::Write as _;
 use std::io::Write;
 use std::str;
 
@@ -107,6 +108,109 @@ impl_decimal_to_sql!(Decimal32);
 impl_decimal_to_sql!(Decimal64);
 impl_decimal_to_sql!(Decimal128);
 impl_decimal_to_sql!(Decimal256);
+
+/// Write one element inside a ClickHouse array literal.
+///
+/// Array bind values are serialized as a complete ClickHouse literal such as
+/// `[1,2,3]` or `['a','b']`. The async connection can pass that literal through
+/// as a server-side `{param:Array(T)}` value (or inline it as a fallback) without
+/// asking callers to assemble SQL strings themselves.
+trait ArrayLiteralElement<ST> {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>>;
+}
+
+macro_rules! impl_array_display_element {
+    ($rust:ty, $sql:ty) => {
+        impl ArrayLiteralElement<$sql> for $rust {
+            fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+                write!(out, "{}", self).map_err(|e| Box::new(e) as Box<dyn Error + Send + Sync>)
+            }
+        }
+    };
+}
+
+impl_array_display_element!(bool, Bool);
+impl_array_display_element!(i8, Int8);
+impl_array_display_element!(i16, SmallInt);
+impl_array_display_element!(i32, Integer);
+impl_array_display_element!(i64, BigInt);
+impl_array_display_element!(i128, Int128);
+impl_array_display_element!(u8, UInt8);
+impl_array_display_element!(u16, UInt16);
+impl_array_display_element!(u32, UInt32);
+impl_array_display_element!(u64, UInt64);
+impl_array_display_element!(u128, UInt128);
+impl_array_display_element!(f32, Float);
+impl_array_display_element!(f64, Double);
+
+impl ArrayLiteralElement<Text> for str {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        push_quoted_string_literal(out, self);
+        Ok(())
+    }
+}
+
+impl ArrayLiteralElement<Text> for String {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        self.as_str().write_element(out)
+    }
+}
+
+impl ArrayLiteralElement<Text> for &str {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        (*self).write_element(out)
+    }
+}
+
+impl<ST, T> ArrayLiteralElement<diesel::sql_types::Nullable<ST>> for Option<T>
+where
+    T: ArrayLiteralElement<ST>,
+{
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        match self {
+            Some(value) => value.write_element(out),
+            None => {
+                out.push_str("NULL");
+                Ok(())
+            }
+        }
+    }
+}
+
+impl<ST, T> ToSql<Array<ST>, ClickHouse> for Vec<T>
+where
+    T: ArrayLiteralElement<ST> + std::fmt::Debug,
+{
+    fn to_sql<'b>(&'b self, out: &mut Output<'b, '_, ClickHouse>) -> serialize::Result {
+        out.write_all(b"[")?;
+        for (idx, value) in self.iter().enumerate() {
+            if idx > 0 {
+                out.write_all(b",")?;
+            }
+            let mut element = String::new();
+            value.write_element(&mut element)?;
+            out.write_all(element.as_bytes())?;
+        }
+        out.write_all(b"]")?;
+        Ok(IsNull::No)
+    }
+}
+
+fn push_quoted_string_literal(out: &mut String, value: &str) {
+    out.push('\'');
+    for ch in value.chars() {
+        match ch {
+            '\0' => out.push_str("\\0"),
+            '\\' => out.push_str("\\\\"),
+            '\'' => out.push_str("\\'"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            other => out.push(other),
+        }
+    }
+    out.push('\'');
+}
 
 macro_rules! impl_parse_from_sql {
     ($rust:ty, $sql:ty) => {
@@ -524,4 +628,45 @@ fn decode_clickhouse_quoted_string(value: &str) -> deserialize::Result<Vec<u8>> 
         }
     }
     Ok(decoded.into_bytes())
+}
+
+#[cfg(test)]
+mod tests {
+    use diesel::query_builder::BindCollector;
+    use diesel::query_builder::bind_collector::RawBytesBindCollector;
+    use diesel::sql_types::Text;
+
+    use super::*;
+    use crate::types::UInt64;
+
+    fn collect_array_bind<ST, T>(value: &T) -> Option<Vec<u8>>
+    where
+        ClickHouse: diesel::sql_types::HasSqlType<Array<ST>>,
+        T: ToSql<Array<ST>, ClickHouse> + ?Sized,
+    {
+        let mut collector = RawBytesBindCollector::<ClickHouse>::new();
+        collector
+            .push_bound_value::<Array<ST>, _>(value, &mut ())
+            .expect("array bind should serialize");
+        collector.binds.pop().flatten()
+    }
+
+    #[test]
+    fn vec_u64_serializes_as_clickhouse_array_literal() {
+        let bytes = collect_array_bind::<UInt64, _>(&vec![1_u64, 2, 3]).unwrap();
+        assert_eq!(String::from_utf8(bytes).unwrap(), "[1,2,3]");
+    }
+
+    #[test]
+    fn vec_string_serializes_escaped_clickhouse_array_literal() {
+        let bytes = collect_array_bind::<Text, _>(&vec![
+            "plain".to_owned(),
+            "quote ' slash \\ newline\n".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            String::from_utf8(bytes).unwrap(),
+            "['plain','quote \\' slash \\\\ newline\\n']"
+        );
+    }
 }

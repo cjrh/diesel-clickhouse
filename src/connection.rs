@@ -1398,6 +1398,67 @@ mod tests {
     }
 
     #[test]
+    fn array_type_metadata_includes_element_type_for_parameters() {
+        let mut lookup = ();
+        let metadata = <ClickHouse as diesel::sql_types::HasSqlType<
+            crate::types::Array<crate::types::UInt64>,
+        >>::metadata(&mut lookup);
+
+        assert_eq!(metadata.name, "Array");
+        assert_eq!(metadata.parameter_type(), "Array(UInt64)");
+    }
+
+    #[test]
+    fn parameterize_binds_uses_typed_array_server_parameters() {
+        let prepared = parameterize_binds(
+            "SELECT has(?, toUInt64(2))",
+            &[ClickHouseTypeMetadata::with_parameter_type(
+                "Array",
+                "Array(UInt64)",
+            )],
+            &[Some(b"[1,2,3]".to_vec())],
+        )
+        .expect("parameterization should succeed");
+
+        assert_eq!(
+            prepared.sql,
+            "SELECT has({dc_p0:Array(UInt64)}, toUInt64(2))"
+        );
+        assert_eq!(
+            prepared.params,
+            vec![("param_dc_p0".to_string(), "[1,2,3]".to_string())]
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_unbound_placeholders() {
+        let err =
+            parameterize_binds("SELECT ?", &[], &[]).expect_err("placeholder should need a bind");
+
+        assert!(
+            err.to_string()
+                .contains("rendered more placeholders than bound values"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_unused_binds() {
+        let err = parameterize_binds(
+            "SELECT '?' AS literal",
+            &[ClickHouseTypeMetadata::new("String")],
+            &[Some(b"unused".to_vec())],
+        )
+        .expect_err("unused bind should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("rendered fewer placeholders (0) than bound values (1)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
     fn parameterize_binds_inlines_nulls() {
         let prepared =
             parameterize_binds("SELECT ?", &[ClickHouseTypeMetadata::new("Int32")], &[None])

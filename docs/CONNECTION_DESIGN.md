@@ -8,7 +8,7 @@ Implemented and live-tested:
 
 - `AsyncClickHouseConnection::establish("http://user:password@host:8123/database")` and explicit `ClickHouseConnectionOptions` construction.
 - Idiomatic Diesel `load`, `first`, and `execute` over ClickHouse HTTP.
-- Diesel bind collection for primitive/text values, sent as ClickHouse HTTP server-side parameters (`{dc_pN:Type}` plus `param_dc_pN`) where type metadata is concrete.
+- Diesel bind collection for primitive/text values and concrete arrays (`Array(UInt64)`, `Array(String)`, `Array(Float32)`), sent as ClickHouse HTTP server-side parameters (`{dc_pN:Type}` plus `param_dc_pN`) where type metadata is concrete.
 - Row loading through `TabSeparatedWithNamesAndTypes` into Diesel `Row`/`Field` abstractions.
 - Primitive numeric, bool, text, binary, and nullable row decoding.
 - `Array<T>` row decoding into `Vec<T>`, `Map<K, V>` row decoding into `BTreeMap<K, V>`, and `Tuple<...>` row decoding into Rust tuples.
@@ -72,12 +72,12 @@ Current recommendation: continue hardening the HTTP implementation because it va
 
 The render layer emits `?` placeholders. The current connection collects Diesel binds, rewrites supported placeholders to ClickHouse server-side parameter syntax (`{dc_pN:Type}`), and sends values as HTTP `param_dc_pN` query options. Remaining literal `?` characters are escaped for the underlying `clickhouse` client so they are not mistaken for unbound client parameters.
 
-The server-parameter path is the default for concrete primitive/string/date/time/UUID/IP/JSON/Dynamic and scaled decimal metadata. The connection intentionally falls back to escaped literal inlining for cases where ClickHouse HTTP parameters are not yet reliable or the backend metadata is too abstract: `NULL` values (ClickHouse 24.8 rejects `NULL` as a `Nullable(T)` HTTP parameter), Diesel `Numeric` without precision/scale, arrays/maps/tuples, `LowCardinality`, `Nested`, `Variant`, and aggregate states.
+The server-parameter path is the default for concrete primitive/string/date/time/UUID/IP/JSON/Dynamic, scaled decimal metadata, and arrays whose element metadata can be rendered as `Array(T)`. The connection intentionally falls back to escaped literal inlining for cases where ClickHouse HTTP parameters are not yet reliable or the backend metadata is too abstract: `NULL` values (ClickHouse 24.8 rejects `NULL` as a `Nullable(T)` HTTP parameter), Diesel `Numeric` without precision/scale, maps/tuples, `LowCardinality`, `Nested`, `Variant`, and aggregate states.
 
 Open questions:
 
 - Whether to keep textual bind inlining long term or render ClickHouse server-side parameters (`{name: Type}`) internally.
-- How to preserve type information for arrays, maps, decimals, UUIDs, IPv4/IPv6, aggregate states, vectors, `Dynamic`, and `Variant`.
+- How to preserve type information for maps, decimals, UUIDs, IPv4/IPv6, aggregate states, `Dynamic`, and `Variant` beyond the currently supported HTTP text representation.
 - How to support true binary binds for `reinterpret(binary, 'Array(Float32)')` vector helpers.
 
 ## Loading rows
@@ -129,7 +129,7 @@ All active connection-hardening TODOs are complete for the initial HTTP-backed `
    - Decision: use ClickHouse server-side HTTP parameters by default when metadata provides a concrete type.
    - Implemented generated placeholders (`{dc_pN:Type}`) and per-query HTTP parameters (`param_dc_pN`) for supported binds.
    - Preserved good Diesel ergonomics: ordinary `.filter(col.eq(value))` continues to work, and unsupported/ambiguous cases fall back to the previous escaped literal inlining path.
-   - Covered server-side text binds, literal question marks, and NULL fallback with live tests.
+   - Covered server-side text binds, typed array binds, literal question marks, optional `when(...)` branches, and NULL fallback with live tests.
    - Future revisit: true binary vector parameters remain out of scope for the HTTP/text parameter path.
 
 3. ✅ **More connection live tests — complete**

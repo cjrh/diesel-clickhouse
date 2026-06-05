@@ -120,6 +120,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    #[sql_name = "diesel_clickhouse_gold_documents"]
+    gold_documents (id) {
+        id -> UInt32,
+        tenant_id -> Text,
+        text -> Text,
+        source_type -> Text,
+        processed_at -> DateTime64,
+        embedding -> Array<Float>,
+    }
+}
+
+diesel::table! {
     #[sql_name = "diesel_clickhouse_connection_inserts"]
     connection_inserts (id) {
         id -> BigInt,
@@ -150,7 +165,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     tenant_rates,
     aggregate_states,
     mv_source,
-    image_vectors
+    image_vectors,
+    gold_documents
 );
 
 // Single-row inserts through Diesel require `treat_none_as_default_value =
@@ -208,6 +224,7 @@ async fn setup(client: &clickhouse::Client) -> TestResult<()> {
         "DROP TABLE IF EXISTS diesel_clickhouse_mv_target",
         "DROP TABLE IF EXISTS diesel_clickhouse_mv_source",
         "DROP TABLE IF EXISTS diesel_clickhouse_image_vectors",
+        "DROP TABLE IF EXISTS diesel_clickhouse_gold_documents",
         "DROP TABLE IF EXISTS diesel_clickhouse_type_showcase",
         "DROP TABLE IF EXISTS diesel_clickhouse_projection_rollups",
         "DROP TABLE IF EXISTS diesel_clickhouse_summing_rollups",
@@ -586,6 +603,176 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .get_result(&mut conn)
         .await?;
         assert_eq!(server_parameter_null, None);
+
+        diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_gold_documents")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_gold_documents (
+                id UInt32,
+                tenant_id String,
+                text String,
+                source_type String,
+                processed_at DateTime64(3),
+                embedding Array(Float32)
+            ) ENGINE = Memory",
+        )
+        .execute(&mut conn)
+        .await?;
+        diesel::sql_query(
+            r#"INSERT INTO diesel_clickhouse_gold_documents VALUES
+                (1, 'acme', 'Rust ? async guide', 'blog', '2024-01-01 00:00:00.000', [1.0, 0.0]),
+                (2, 'acme', 'ClickHouse diesel notes', '', '2024-01-01 00:05:00.000', [0.2, 0.8]),
+                (3, 'beta', 'Rust analytics', 'doc', '2024-01-01 00:10:00.000', [0.4, 0.6]),
+                (4, 'acme', 'rust diesel clickhouse', 'doc', '2024-01-01 00:15:00.000', [0.9, 0.1])"#,
+        )
+        .execute(&mut conn)
+        .await?;
+
+        let needle = "rust";
+        let score_expr = diesel::dsl::sql::<diesel::sql_types::Float>(
+            "toFloat32(if(positionCaseInsensitive(text, ",
+        )
+        .bind::<diesel::sql_types::Text, _>(needle)
+        .sql(") > 0, 1, 0)) AS score");
+        let match_filter =
+            diesel::dsl::sql::<diesel::sql_types::Bool>("positionCaseInsensitive(text, ")
+                .bind::<diesel::sql_types::Text, _>(needle)
+                .sql(") > 0 AND text != '?' /* ? in comment is not a bind */");
+        let search_rows: Vec<(u32, String, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(match_filter)
+            .select((gold_documents::id, gold_documents::text, score_expr))
+            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::processed_at.desc())
+            .then_order_by(gold_documents::id.asc())
+            .limit(10_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            search_rows,
+            vec![
+                (4, "rust diesel clickhouse".to_string(), 1.0),
+                (1, "Rust ? async guide".to_string(), 1.0),
+            ]
+        );
+
+        let optional_neither: Vec<i64> = events
+            .filter(diesel_clickhouse::when(false, tenant_id.eq("ignored")))
+            .filter(diesel_clickhouse::when(false, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_neither, vec![1, 2]);
+
+        let optional_tenant_only: Vec<i64> = events
+            .filter(diesel_clickhouse::when(true, tenant_id.eq("beta")))
+            .filter(diesel_clickhouse::when(false, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_tenant_only, vec![4, 5]);
+
+        let optional_success_only: Vec<i64> = events
+            .filter(diesel_clickhouse::when(false, tenant_id.eq("ignored")))
+            .filter(diesel_clickhouse::when(true, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_success_only, vec![2, 6]);
+
+        let optional_both: Vec<i64> = events
+            .filter(diesel_clickhouse::when(true, tenant_id.eq("beta")))
+            .filter(diesel_clickhouse::when(true, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_both, vec![6]);
+
+        type UInt64Array =
+            diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::UInt64>;
+        type TextArray = diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>;
+        type Float32Array = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>;
+
+        let selected_by_u64_array: Vec<i64> = events
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("has(")
+                    .bind::<UInt64Array, _>(diesel_clickhouse::bind::<UInt64Array, _>(vec![
+                        1_u64, 4_u64,
+                    ]))
+                    .sql(", toUInt64(id))"),
+            )
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(selected_by_u64_array, vec![1, 4]);
+
+        let selected_by_empty_u64_array: Vec<i64> = events
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("has(")
+                    .bind::<UInt64Array, _>(diesel_clickhouse::bind::<UInt64Array, _>(
+                        Vec::<u64>::new(),
+                    ))
+                    .sql(", toUInt64(id))"),
+            )
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert!(selected_by_empty_u64_array.is_empty());
+
+        let selected_by_parallel_string_arrays: Vec<i64> = events
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "arrayExists((allowed_tenant, allowed_status) -> \
+                     allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail'), ",
+                )
+                .bind::<TextArray, _>(diesel_clickhouse::bind::<TextArray, _>(vec![
+                    "acme".to_string(),
+                    "beta".to_string(),
+                ]))
+                .sql(", ")
+                .bind::<TextArray, _>(diesel_clickhouse::bind::<TextArray, _>(vec![
+                    "ok".to_string(),
+                    "fail".to_string(),
+                ]))
+                .sql(")"),
+            )
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(selected_by_parallel_string_arrays, vec![1, 3, 6]);
+
+        let vector_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                diesel::dsl::sql::<diesel::sql_types::Float>(
+                    "toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ",
+                )
+                .bind::<Float32Array, _>(diesel_clickhouse::bind::<Float32Array, _>(vec![
+                    1.0_f32, 0.0_f32,
+                ]))
+                .sql("))) AS score"),
+            ))
+            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(vector_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+        diesel::sql_query("DROP TABLE diesel_clickhouse_gold_documents")
+            .execute(&mut conn)
+            .await?;
 
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_spike")
             .execute(&mut conn)
