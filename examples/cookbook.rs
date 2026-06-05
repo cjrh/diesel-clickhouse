@@ -22,9 +22,9 @@ use diesel::prelude::*;
 // async connection's `.load`/`.first` resolve unambiguously.
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
-    ClickHouseConnectionOptions, ClickHouseJoinDsl, alias_ref, array_exists2, bind, clickhouse,
-    count, count_if, expr_as, final_table, has, lambda2, source_column, to_sql,
-    to_sql_with_metadata, when,
+    ClickHouseConnectionOptions, ClickHouseJoinDsl, DataType, TableEngine, alias_ref,
+    array_exists2, bind, clickhouse, count, count_if, create_table, expr_as, final_table, has,
+    lambda2, source_column, to_sql, to_sql_with_metadata, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -113,6 +113,63 @@ async fn main() -> Result<()> {
 
     let mut doc = CookbookDoc::new();
     intro(&mut doc);
+
+    // ----- Recipe: database bootstrap ---------------------------------------
+    doc.recipe(
+        "Bootstrap a database, then use `AsyncClickHouseConnection`",
+        "Create the database with the underlying `clickhouse` client before you \
+         build a database-scoped async Diesel connection. This keeps admin DDL \
+         explicit, then moves ordinary reads/writes back to \
+         `AsyncClickHouseConnection` once the database exists.",
+    );
+    doc.diesel(R_BOOTSTRAP_RUST);
+    let bootstrap_database = "cookbook_bootstrap";
+    let bootstrap_table = "events";
+    client
+        .query("DROP DATABASE IF EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
+    client
+        .query("CREATE DATABASE IF NOT EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
+    let bootstrap_ddl = create_table(format!("{bootstrap_database}.{bootstrap_table}"))
+        .if_not_exists()
+        .column("id", DataType::UInt64)
+        .engine(TableEngine::memory());
+    let bootstrap_ddl_sql = to_sql(&bootstrap_ddl)?;
+    client.query(&bootstrap_ddl_sql).execute().await?;
+
+    let mut bootstrap_url = url::Url::parse(&database_url)?;
+    bootstrap_url.set_path(bootstrap_database);
+    let mut bootstrap_conn = ClickHouseConnectionOptions::from_url(bootstrap_url.as_str())?
+        .connect()
+        .await?;
+    bootstrap_conn
+        .batch_execute("INSERT INTO events VALUES (1)")
+        .await?;
+    #[derive(QueryableByName)]
+    struct BootstrapCount {
+        #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+        count: u64,
+    }
+    let count_row: BootstrapCount = diesel::sql_query("SELECT count() AS count FROM events")
+        .get_result(&mut bootstrap_conn)
+        .await?;
+    assert_eq!(count_row.count, 1);
+    doc.rendered(&bootstrap_ddl_sql);
+    doc.text_output(&format!(
+        "bootstrapped database {bootstrap_database:?}; async connection read count: {}",
+        count_row.count
+    ));
+    drop(bootstrap_conn);
+    client
+        .query("DROP DATABASE IF EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
 
     // ----- Recipe: typed filters --------------------------------------------
     doc.recipe(
@@ -938,6 +995,30 @@ INSERT INTO cookbook_documents VALUES
 DROP TABLE IF EXISTS cookbook_ingest;
 CREATE TABLE cookbook_ingest (id UInt64, tenant_id String) ENGINE = Memory;
 "#;
+
+const R_BOOTSTRAP_RUST: &str = r#"use diesel_async::SimpleAsyncConnection;
+use diesel_clickhouse::{
+    clickhouse::{self, sql::Identifier}, create_table, ClickHouseConnectionOptions,
+    DataType, TableEngine, to_sql,
+};
+
+// Admin/bootstrap DDL uses the direct ClickHouse client without a database.
+let admin = clickhouse::Client::default().with_url("http://localhost:8123");
+admin.query("CREATE DATABASE IF NOT EXISTS ?")
+    .bind(Identifier("analytics"))
+    .execute().await?;
+
+let ddl = create_table("analytics.events")
+    .if_not_exists()
+    .column("id", DataType::UInt64)
+    .engine(TableEngine::memory());
+admin.query(&to_sql(&ddl)?).execute().await?;
+
+// Once the database exists, use the async Diesel connection for normal work.
+let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
+    .database("analytics")
+    .connect().await?;
+conn.batch_execute("INSERT INTO events VALUES (1)").await?;"#;
 
 const R_FILTER_SQL: &str = "SELECT id, tenant_id FROM cookbook_events WHERE tenant_id = 'acme' AND success = true ORDER BY id";
 

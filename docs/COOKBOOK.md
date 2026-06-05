@@ -50,6 +50,53 @@ The `text` blocks below are the live results captured during that run.
 ## Recipes
 
 
+### Bootstrap a database, then use `AsyncClickHouseConnection`
+
+Create the database with the underlying `clickhouse` client before you build a database-scoped async Diesel connection. This keeps admin DDL explicit, then moves ordinary reads/writes back to `AsyncClickHouseConnection` once the database exists.
+
+Diesel:
+
+```rust,ignore
+use diesel_async::SimpleAsyncConnection;
+use diesel_clickhouse::{
+    clickhouse::{self, sql::Identifier}, create_table, ClickHouseConnectionOptions,
+    DataType, TableEngine, to_sql,
+};
+
+// Admin/bootstrap DDL uses the direct ClickHouse client without a database.
+let admin = clickhouse::Client::default().with_url("http://localhost:8123");
+admin.query("CREATE DATABASE IF NOT EXISTS ?")
+    .bind(Identifier("analytics"))
+    .execute().await?;
+
+let ddl = create_table("analytics.events")
+    .if_not_exists()
+    .column("id", DataType::UInt64)
+    .engine(TableEngine::memory());
+admin.query(&to_sql(&ddl)?).execute().await?;
+
+// Once the database exists, use the async Diesel connection for normal work.
+let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
+    .database("analytics")
+    .connect().await?;
+conn.batch_execute("INSERT INTO events VALUES (1)").await?;
+```
+
+Rendered by `diesel-clickhouse`:
+
+```sql
+CREATE TABLE IF NOT EXISTS `cookbook_bootstrap`.`events` (
+    `id` UInt64
+) ENGINE = Memory
+```
+
+Output from this run:
+
+```text
+bootstrapped database "cookbook_bootstrap"; async connection read count: 1
+```
+
+
 ### Type-safe filters instead of `sql::<Bool>`
 
 Write `WHERE` constraints as typed column expressions. The column path and the literal type are checked against your `table!` schema, so a renamed column or wrong literal type is a compile error — unlike a `sql::<Bool>("tenant_id = 'acme'")` string, which is opaque to the compiler.

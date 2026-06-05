@@ -74,6 +74,36 @@ let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
 
 The current connection supports `establish`, `AsyncClickHouseConnection::with_client(client)`, explicit `ClickHouseConnectionOptions`, `load`, `first`, `execute`, `batch_execute`, primitive/text/nullable row values, `Array<T>` into `Vec<T>`, `Map<K, V>` into `BTreeMap<K, V>`, `Tuple<...>` into Rust tuples, string-form Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant values, optional `BigDecimal` values with the `bigdecimal` feature, and `diesel::sql_query(...)`/`QueryableByName` for raw SQL. It sends supported Diesel-collected bind values as ClickHouse HTTP server-side parameters; ambiguous cases such as `NULL` HTTP parameters and abstract composite metadata fall back to escaped literal inlining. Concrete array binds (`Array(UInt64)`, `Array(String)`, `Array(Float32)`) are serialized by the crate as typed ClickHouse array literals and sent through the same Diesel-owned bind path. Literal `?` characters inside SQL strings/comments are preserved.
 
+### Bootstrap and database creation
+
+`AsyncClickHouseConnection::establish(...)` and `ClickHouseConnectionOptions::connect()` run a `SELECT 1` health check through the configured client. If you configure `.database("analytics")`, that database must already exist. For first-run bootstrap, use a database-less/admin `clickhouse::Client` for `CREATE DATABASE IF NOT EXISTS`, then create tables, then construct the database-scoped async Diesel connection for ordinary work:
+
+```rust,ignore
+use diesel_async::SimpleAsyncConnection;
+use diesel_clickhouse::{
+    clickhouse::{Client, sql::Identifier},
+    create_table, to_sql, ClickHouseConnectionOptions, DataType, TableEngine,
+};
+
+let admin = Client::default().with_url("http://localhost:8123");
+admin.query("CREATE DATABASE IF NOT EXISTS ?")
+    .bind(Identifier("analytics"))
+    .execute()
+    .await?;
+
+let ddl = create_table("analytics.events")
+    .if_not_exists()
+    .column("id", DataType::UInt64)
+    .engine(TableEngine::memory());
+admin.query(&to_sql(&ddl)?).execute().await?;
+
+let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
+    .database("analytics")
+    .connect()
+    .await?;
+conn.batch_execute("INSERT INTO events VALUES (1)").await?;
+```
+
 ### Raw fragments and array binds under async execution
 
 Raw SQL is still sometimes necessary for ClickHouse-only grammar. When executing through `AsyncClickHouseConnection`, put bind values into the raw fragment with Diesel's literal binding API instead of writing a bare `?` and binding later through an external client:
