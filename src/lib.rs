@@ -115,7 +115,7 @@ pub use clauses::{
 pub use clickhouse;
 pub use connection::{
     AsyncClickHouseConnection, ClickHouseConnectionOptions, ClickHouseField, ClickHouseRow,
-    ClickHouseTransactionManager,
+    ClickHouseTransactionManager, InsertBatchOptions,
 };
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,

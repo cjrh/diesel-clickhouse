@@ -17,6 +17,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use diesel::connection::{
     CacheSize, Instrumentation, InstrumentationEvent, StrQueryHelper, TransactionManagerStatus,
@@ -86,6 +87,55 @@ pub struct ClickHouseConnectionOptions {
     password: Option<String>,
     database: Option<String>,
     options: BTreeMap<String, String>,
+}
+
+/// Per-call options for [`AsyncClickHouseConnection::insert_batch_with_options`].
+///
+/// These options are applied to the native ClickHouse RowBinary `INSERT` used
+/// by `insert_batch`: `send_timeout` bounds each chunk write, `end_timeout`
+/// bounds waiting for the server response at commit, and settings are scoped to
+/// this one insert request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InsertBatchOptions {
+    send_timeout: Option<Duration>,
+    end_timeout: Option<Duration>,
+    settings: BTreeMap<String, String>,
+}
+
+impl InsertBatchOptions {
+    /// Create empty insert options.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timeout for sending each RowBinary chunk.
+    pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.send_timeout = timeout.into();
+        self
+    }
+
+    /// Set the timeout for waiting for ClickHouse to finish the INSERT.
+    pub fn end_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.end_timeout = timeout.into();
+        self
+    }
+
+    /// Set both RowBinary insert timeouts.
+    pub fn timeouts(
+        mut self,
+        send_timeout: impl Into<Option<Duration>>,
+        end_timeout: impl Into<Option<Duration>>,
+    ) -> Self {
+        self.send_timeout = send_timeout.into();
+        self.end_timeout = end_timeout.into();
+        self
+    }
+
+    /// Add or replace a ClickHouse setting for this insert request.
+    pub fn setting(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.settings.insert(name.into(), value.into());
+        self
+    }
 }
 
 impl ClickHouseConnectionOptions {
@@ -221,11 +271,14 @@ impl AsyncClickHouseConnection {
     /// write path ClickHouse is built for.
     ///
     /// `Row` is a `#[derive(clickhouse::Row, serde::Serialize)]` struct whose
-    /// fields name and type the target columns; `table` is the unquoted table
-    /// name. The batch is validated against the table's schema before sending
-    /// (a one-time metadata fetch). The whole insert is atomic from the client's
-    /// perspective: it is only committed when the final request returns `200`,
-    /// so an error means no rows from this call were accepted.
+    /// fields name and type the target columns; `table` is a bare or
+    /// database-qualified table identifier. The identifier is validated before
+    /// execution. The batch is validated against the table's
+    /// schema before sending (a one-time metadata fetch). The whole insert is
+    /// atomic from the client's perspective: it is only committed when the final
+    /// request returns `200`, so an error means no rows from this call were
+    /// accepted. Use [`insert_batch_with_options`](Self::insert_batch_with_options)
+    /// when one insert needs timeouts or settings.
     ///
     /// ```ignore
     /// #[derive(clickhouse::Row, serde::Serialize)]
@@ -244,11 +297,41 @@ impl AsyncClickHouseConnection {
         Row: clickhouse::RowOwned + clickhouse::RowWrite,
         Rows: IntoIterator<Item = Row>,
     {
+        self.insert_batch_with_options(table, rows, InsertBatchOptions::default())
+            .await
+    }
+
+    /// Insert many rows with per-call RowBinary options.
+    ///
+    /// This is the same high-throughput path as [`insert_batch`](Self::insert_batch),
+    /// but lets callers preserve operational bounds such as send/end timeouts or
+    /// one-off ClickHouse insert settings without configuring a separate client.
+    /// The table name may be bare (`events`) or database-qualified
+    /// (`analytics.events`); each identifier segment is validated before being
+    /// passed to the ClickHouse client.
+    pub async fn insert_batch_with_options<Row, Rows>(
+        &mut self,
+        table: &str,
+        rows: Rows,
+        options: InsertBatchOptions,
+    ) -> QueryResult<usize>
+    where
+        Row: clickhouse::RowOwned + clickhouse::RowWrite,
+        Rows: IntoIterator<Item = Row>,
+    {
+        validate_table_identifier(table)?;
         let mut insert = self
             .client
             .insert::<Row>(table)
             .await
             .map_err(clickhouse_error)?;
+        if options.send_timeout.is_some() || options.end_timeout.is_some() {
+            insert = insert.with_timeouts(options.send_timeout, options.end_timeout);
+        }
+        for (name, value) in options.settings {
+            insert = insert.with_setting(name, value);
+        }
+
         let mut written = 0usize;
         for row in rows {
             insert.write(&row).await.map_err(clickhouse_error)?;
@@ -584,6 +667,39 @@ fn database_from_path(parsed: &url::Url) -> Option<String> {
         .path_segments()?
         .find(|segment| !segment.is_empty())
         .map(str::to_owned)
+}
+
+fn validate_table_identifier(table: &str) -> QueryResult<()> {
+    if table.trim() != table || table.is_empty() {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse table name: {table:?}").into(),
+        ));
+    }
+
+    for segment in table.split('.') {
+        validate_bare_identifier(segment, "table identifier")?;
+    }
+    Ok(())
+}
+
+fn validate_bare_identifier(value: &str, kind: &str) -> QueryResult<()> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(Error::QueryBuilderError(
+            format!("empty ClickHouse {kind}").into(),
+        ));
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse {kind}: {value:?}").into(),
+        ));
+    }
+    if chars.any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric())) {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse {kind}: {value:?}").into(),
+        ));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone)]
@@ -1334,6 +1450,28 @@ mod tests {
                 .contains("rendered more placeholders than bound values"),
             "unexpected error: {err}"
         );
+    }
+
+    #[test]
+    fn validate_table_identifier_accepts_bare_and_qualified_names() {
+        validate_table_identifier("events").unwrap();
+        validate_table_identifier("analytics.events").unwrap();
+    }
+
+    #[test]
+    fn validate_table_identifier_rejects_unsafe_names() {
+        for table in [
+            "",
+            " events",
+            "events ",
+            "events; DROP TABLE events",
+            "bad-name",
+        ] {
+            assert!(
+                validate_table_identifier(table).is_err(),
+                "{table:?} should be rejected"
+            );
+        }
     }
 
     #[test]

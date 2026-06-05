@@ -14,6 +14,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 - Async connection support for Diesel-owned array binds in the Carson-critical shapes: `Vec<u64>`/`Array(UInt64)`, `Vec<String>`/`Array(String)`, and `Vec<f32>`/`Array(Float32)`, covered by live ClickHouse tests for membership filters, parallel-array `arrayExists`, and vector scoring.
 - Downstream async-connection implementation plan in `docs/ASYNC_CONNECTION_DOWNSTREAM_PLAN.md`.
 - Targeted ClickHouse helpers for common Carson raw SQL patterns: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, and typed `alias_ref::<ST>(...)` for validated `ORDER BY`/`GROUP BY` alias references.
+- `InsertBatchOptions` and `AsyncClickHouseConnection::insert_batch_with_options(...)` for RowBinary insert send/end timeouts and per-insert settings, with table identifier validation.
 
 ### Fixed
 - Added placeholder-mismatch tests for `AsyncClickHouseConnection` bind parameterization, covering both extra rendered placeholders and unused collected binds.

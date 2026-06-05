@@ -145,13 +145,17 @@ let rows: Vec<TenantOverview> = events::table
     .await?;
 ```
 
-For raw SQL, aliased expressions, or very wide result shapes, use `diesel::sql_query(...)` plus `QueryableByName` and annotate each field with its SQL type. This avoids Diesel's tuple arity pressure for 17+ column analytics rows and makes aliases explicit:
+For raw SQL, aliased expressions, or very wide result shapes, use `diesel::sql_query(...)` plus `QueryableByName` and annotate each field with its SQL type. This avoids Diesel's tuple arity pressure for 17+ column analytics rows and makes aliases explicit. The live test suite covers a 16-column `QueryableByName` row with `String`, `UInt64`, `UInt32`, `Nullable(Int32)`, `Float32`, `UUID`, `DateTime64`, and `Array(Float32)` fields.
 
 ```rust,ignore
 #[derive(QueryableByName)]
 struct DocumentHit {
     #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
     id: u64,
+    #[diesel(sql_type = diesel_clickhouse::sql_types::Uuid)]
+    uuid_value: String,
+    #[diesel(sql_type = diesel_clickhouse::sql_types::DateTime64)]
+    processed_at: String,
     #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
     source_type: Option<String>,
     #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
@@ -239,9 +243,20 @@ struct EventRow {
 
 // One columnar RowBinary request; returns the number of rows sent.
 let written = conn.insert_batch("events", events).await?;
+
+// Add per-insert operational bounds/settings when needed.
+let written = conn
+    .insert_batch_with_options(
+        "events",
+        events,
+        InsertBatchOptions::new()
+            .timeouts(Some(send_timeout), Some(end_timeout))
+            .setting("query_id", query_id),
+    )
+    .await?;
 ```
 
-This sends one columnar RowBinary request for the whole batch instead of N round-trips of escaped text — orders of magnitude faster than looping single-row inserts, and the recommended approach for any non-trivial write volume.
+This sends one columnar RowBinary request for the whole batch instead of N round-trips of escaped text — orders of magnitude faster than looping single-row inserts, and the recommended approach for any non-trivial write volume. Table names passed to `insert_batch`/`insert_batch_with_options` are validated as bare or database-qualified identifiers before execution.
 
 For long-running, periodically-flushed ingestion, reach for the client's `inserter(...)` directly. [`AsyncClickHouseConnection::client`](crate::AsyncClickHouseConnection::client) exposes the configured `clickhouse::Client`, which is cheap to clone and usable from your own async code:
 
