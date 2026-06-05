@@ -20,6 +20,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ### Documentation
 - Clarified async bind ownership, array bind usage, `with_client(...)`, pooling trade-offs, and connection-level settings versus SQL `SETTINGS` in the usage/design docs and feature matrix.
+- Added live-generated cookbook recipes for migrating from `to_sql` + external binds, raw SQL literal binds, async array parameters, vector scoring, and named struct result mapping.
 
 ## [0.9.0] — 2026-06-04
 
