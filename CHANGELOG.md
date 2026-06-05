@@ -20,6 +20,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 - Cookbook/usage bootstrap recipe for creating a database with the direct `clickhouse` client before constructing a database-scoped `AsyncClickHouseConnection`.
 - `vector_dot_product_f32(left, right)` for Diesel-owned `Array(Float32)` vector scoring without hand-assembling `arrayMap`/`arraySum` SQL.
 - `AsyncClickHouseConnection::load_clickhouse_rows(...)`, a migration bridge that keeps Diesel-owned binds while decoding results into existing `#[derive(clickhouse::Row, serde::Deserialize)]` structs via RowBinary.
+- `named_param::<ST, _>("name", value)` / `ch_param(...)` for reusable ClickHouse `{name:Type}` HTTP parameters bound through Diesel and de-duplicated during async execution.
 
 ### Fixed
 - Added placeholder-mismatch tests for `AsyncClickHouseConnection` bind parameterization, covering both extra rendered placeholders and unused collected binds.

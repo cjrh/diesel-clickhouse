@@ -36,6 +36,7 @@ use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt};
 
 use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata};
+use crate::params::split_named_parameter_bind;
 
 /// A native async Diesel connection for ClickHouse over HTTP.
 ///
@@ -777,6 +778,7 @@ fn parameterize_binds(
 ) -> QueryResult<PreparedQuery> {
     let mut result = String::with_capacity(sql.len());
     let mut params = Vec::new();
+    let positional_binds = collect_named_parameters(&mut params, metadata, binds)?;
     let mut chars = sql.char_indices().peekable();
     let mut bind_idx = 0;
     let mut state = SqlScanState::Code;
@@ -789,10 +791,19 @@ fn parameterize_binds(
                         chars.next();
                         result.push('?');
                     } else {
+                        let Some(&actual_bind_idx) = positional_binds.get(bind_idx) else {
+                            return Err(Error::QueryBuilderError(
+                                format!(
+                                    "ClickHouse query rendered more placeholders than bound values ({})",
+                                    positional_binds.len()
+                                )
+                                .into(),
+                            ));
+                        };
                         push_bind_parameter_or_literal(
                             &mut result,
                             &mut params,
-                            bind_idx,
+                            actual_bind_idx,
                             metadata,
                             binds,
                         )?;
@@ -891,11 +902,11 @@ fn parameterize_binds(
         }
     }
 
-    if bind_idx != binds.len() {
+    if bind_idx != positional_binds.len() {
         return Err(Error::QueryBuilderError(
             format!(
                 "ClickHouse query rendered fewer placeholders ({bind_idx}) than bound values ({})",
-                binds.len()
+                positional_binds.len()
             )
             .into(),
         ));
@@ -905,6 +916,63 @@ fn parameterize_binds(
         sql: result,
         params,
     })
+}
+
+fn collect_named_parameters(
+    params: &mut Vec<(String, String)>,
+    metadata: &[ClickHouseTypeMetadata],
+    binds: &[Option<Vec<u8>>],
+) -> QueryResult<Vec<usize>> {
+    let mut positional_binds = Vec::new();
+    let mut named_values = BTreeMap::<String, (String, String)>::new();
+
+    for (idx, bind) in binds.iter().enumerate() {
+        let Some(bind_metadata) = metadata.get(idx) else {
+            positional_binds.push(idx);
+            continue;
+        };
+
+        if !bind_metadata.is_named_parameter() {
+            positional_binds.push(idx);
+            continue;
+        }
+
+        let Some(bytes) = bind else {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse named parameters cannot be NULL".into(),
+            ));
+        };
+        let (name, value_bytes) = split_named_parameter_bind(bytes)?;
+        if !supports_server_parameter_type(bind_metadata.parameter_type()) {
+            return Err(Error::QueryBuilderError(
+                format!(
+                    "ClickHouse named parameter {name:?} has unsupported type {}",
+                    bind_metadata.parameter_type()
+                )
+                .into(),
+            ));
+        }
+        let value = server_parameter_value(bind_metadata.name, &Some(value_bytes.to_vec()))?;
+        let setting_name = format!("param_{name}");
+        let type_name = bind_metadata.parameter_type().to_owned();
+
+        if let Some((existing_type, existing_value)) = named_values.get(&setting_name) {
+            if existing_type != &type_name || existing_value != &value {
+                return Err(Error::QueryBuilderError(
+                    format!("conflicting values for ClickHouse named parameter {name:?}").into(),
+                ));
+            }
+        } else {
+            named_values.insert(setting_name, (type_name, value));
+        }
+    }
+
+    params.extend(
+        named_values
+            .into_iter()
+            .map(|(setting_name, (_, value))| (setting_name, value)),
+    );
+    Ok(positional_binds)
 }
 
 #[cfg(test)]

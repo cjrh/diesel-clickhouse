@@ -82,6 +82,7 @@ mod joins;
 mod json;
 mod operators;
 mod ordering;
+mod params;
 mod predicate;
 mod serialize;
 mod types;
@@ -185,6 +186,7 @@ pub use operators::{
     NotILike,
 };
 pub use ordering::{AliasRef, FillBound, NoFillBound, WithFill, alias_ref, with_fill};
+pub use params::{NamedParam, ch_param, named_param};
 pub use predicate::{When, when};
 pub use vectors::{
     VectorBytes, VectorBytesEncoding, VectorDotProductF32, VectorLiteral, vector_dot_product_f32,

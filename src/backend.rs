@@ -30,6 +30,13 @@ pub struct ClickHouseTypeMetadata {
     /// Canonical ClickHouse type name for diagnostics and broad behavior groups.
     pub name: &'static str,
     parameter_type: Cow<'static, str>,
+    bind_kind: ClickHouseBindKind,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum ClickHouseBindKind {
+    Positional,
+    NamedParameter,
 }
 
 impl ClickHouseTypeMetadata {
@@ -37,6 +44,7 @@ impl ClickHouseTypeMetadata {
         Self {
             name,
             parameter_type: Cow::Borrowed(name),
+            bind_kind: ClickHouseBindKind::Positional,
         }
     }
 
@@ -49,7 +57,20 @@ impl ClickHouseTypeMetadata {
         Self {
             name,
             parameter_type: parameter_type.into(),
+            bind_kind: ClickHouseBindKind::Positional,
         }
+    }
+
+    /// Mark this metadata as a named ClickHouse HTTP parameter binding.
+    pub(crate) fn into_named_parameter(mut self) -> Self {
+        self.bind_kind = ClickHouseBindKind::NamedParameter;
+        self
+    }
+
+    /// True when the bind bytes carry a named HTTP parameter value rather than
+    /// a positional SQL placeholder value.
+    pub(crate) fn is_named_parameter(&self) -> bool {
+        self.bind_kind == ClickHouseBindKind::NamedParameter
     }
 
     /// ClickHouse type string used for HTTP server-side parameters.
@@ -279,6 +300,7 @@ where
     metadata.positional_bind_types = bind_collector
         .metadata
         .iter()
+        .filter(|metadata| !metadata.is_named_parameter())
         .map(|metadata| metadata.parameter_type().to_owned())
         .collect();
 

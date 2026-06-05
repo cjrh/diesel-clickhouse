@@ -692,7 +692,7 @@ parallel arrayExists allowed ids: [
 
 ### Vector scoring through async execution
 
-A query embedding is just an `Array(Float32)` bind. Diesel owns the vector bytes, and `vector_dot_product_f32` hides the ClickHouse-specific `arrayMap`/`arraySum` scoring expression.
+A query embedding can be a reusable ClickHouse named parameter. Diesel owns the vector bytes, `named_param` renders `{q:Array(Float32)}`, and `vector_dot_product_f32` hides the ClickHouse-specific `arrayMap`/`arraySum` scoring expression.
 
 ClickHouse SQL:
 
@@ -704,17 +704,17 @@ Diesel:
 
 ```rust,ignore
 use diesel::sql_types::Float;
-use diesel_clickhouse::{alias_ref, bind, expr_as, vector_dot_product_f32};
+use diesel_clickhouse::{alias_ref, expr_as, named_param, vector_dot_product_f32};
 use diesel_clickhouse::sql_types::Array;
 
 type Float32Array = Array<Float>;
-let query_vector = vec![1.0_f32, 0.0_f32];
+let query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
 let rows: Vec<(u64, f32)> = documents::table
     .filter(documents::tenant_id.eq("acme"))
     .select((
         documents::id,
         expr_as(
-            vector_dot_product_f32(documents::embedding, bind::<Float32Array, _>(query_vector)),
+            vector_dot_product_f32(documents::embedding, query_vector),
             "score",
         ),
     ))
@@ -726,7 +726,7 @@ let rows: Vec<(u64, f32)> = documents::table
 Rendered by `diesel-clickhouse`:
 
 ```sql
-SELECT `cookbook_documents`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, `cookbook_documents`.`embedding`, ?))) AS `score` FROM `cookbook_documents` WHERE (`cookbook_documents`.`tenant_id` = ?) ORDER BY `score` DESC, `cookbook_documents`.`id` ASC
+SELECT `cookbook_documents`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, `cookbook_documents`.`embedding`, {q:Array(Float32)}))) AS `score` FROM `cookbook_documents` WHERE (`cookbook_documents`.`tenant_id` = ?) ORDER BY `score` DESC, `cookbook_documents`.`id` ASC
 ```
 
 Both the ClickHouse SQL and the Diesel query above return the same rows:

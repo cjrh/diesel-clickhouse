@@ -7,28 +7,28 @@ use diesel_clickhouse::{
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
     approx_top_sum_with_reserved, array_all, array_count, array_exists, array_exists2,
     array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode,
-    buffer, cast, ceil, city_hash64, collapsing_merge_tree, concat, corr, cosine_distance, count,
-    count_if, count_merge, count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp,
-    covar_samp_stable, create_materialized_view, create_table, cube, cut_query_string, date_diff,
-    dense_rank, distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
-    finalize_aggregation, first_significant_subdomain, floor, greatest, group_array_merge,
-    group_array_state, group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike,
-    ilike_escape, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
-    is_ipv6_string, is_valid_json, join_column, json_exists, json_extract_int, json_extract_int_ci,
-    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
-    json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
-    json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
-    left_utf8, length, length_utf8, like, like_escape, linf_distance, linf_norm, lower,
-    mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
-    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
-    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
-    multi_match_any_index, mutation_assignment, not_ilike, not_ilike_escape, not_like,
-    not_like_escape, null_if, partition_by, partition_expr, partition_id, position,
-    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
-    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
-    replacing_merge_tree, rollup, round, row_number, sample, sample_offset,
-    simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64,
-    source_column, source_column_as, stddev_pop, stddev_pop_stable, stddev_samp,
+    buffer, cast, ceil, ch_param, city_hash64, collapsing_merge_tree, concat, corr,
+    cosine_distance, count, count_if, count_merge, count_merge_state, count_state, covar_pop,
+    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table, cube,
+    cut_query_string, date_diff, dense_rank, distributed, domain, domain_without_www, expr_as,
+    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
+    greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
+    histogram, if_, ilike, ilike_escape, ipv4_num_to_string, ipv4_string_to_num,
+    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, join_column, json_exists,
+    json_extract_int, json_extract_int_ci, json_extract_int_ci_path, json_extract_int_path,
+    json_extract_raw_ci, json_extract_raw_path, json_extract_string_ci, json_extract_string_path,
+    json_has, json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm,
+    lag_in_frame, lambda, lambda2, least, left_utf8, length, length_utf8, like, like_escape,
+    linf_distance, linf_norm, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
+    map_from_arrays, map_keys, map_values, max_merge, max_state, min_merge, min_state,
+    multi_fuzzy_match_all_indices, multi_fuzzy_match_any, multi_fuzzy_match_any_index,
+    multi_match_all_indices, multi_match_any, multi_match_any_index, mutation_assignment,
+    named_param, not_ilike, not_ilike_escape, not_like, not_like_escape, null_if, partition_by,
+    partition_expr, partition_id, position, position_case_insensitive, prewhere, projection,
+    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
+    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
+    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
+    sip_hash64, source_column, source_column_as, stddev_pop, stddev_pop_stable, stddev_samp,
     stddev_samp_stable, substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with,
     to_bool, to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null,
     to_int64, to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_sql_with_metadata,
@@ -250,6 +250,54 @@ fn renders_array_join_clause() {
     assert_eq!(
         to_sql(&query).unwrap(),
         "SELECT `tag` FROM `events` FINAL ARRAY JOIN `events`.`tags` AS `tag` WHERE `tag` = 'paid'"
+    );
+}
+
+#[test]
+fn renders_named_http_parameters() {
+    use self::image_vectors::dsl::*;
+
+    type Float32Array = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>;
+    let q = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0, 0.0]);
+    let query = image_vectors
+        .select((id, vector_dot_product_f32(embedding, q.clone())))
+        .filter(vector_dot_product_f32(embedding, q).gt(0.5_f32));
+    let rendered = to_sql_with_metadata(&query).unwrap();
+
+    assert_eq!(
+        rendered.sql,
+        "SELECT `image_vectors`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, {q:Array(Float32)}))) FROM `image_vectors` WHERE (toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, {q:Array(Float32)}))) > ?)"
+    );
+    assert_eq!(rendered.positional_bind_types(), &["Float32"]);
+    assert_eq!(rendered.named_parameters(), &["q"]);
+    assert_eq!(rendered.named_parameter_details()[0].occurrences, 2);
+}
+
+#[test]
+fn ch_param_alias_renders_named_http_parameter() {
+    let rendered = to_sql_with_metadata(&diesel::select(ch_param::<
+        diesel_clickhouse::sql_types::UInt64,
+        _,
+    >("user_id", 7_u64)))
+    .unwrap();
+
+    assert_eq!(rendered.sql, "SELECT {user_id:UInt64}");
+    assert!(rendered.positional_bind_types().is_empty());
+    assert_eq!(rendered.named_parameters(), &["user_id"]);
+}
+
+#[test]
+fn named_http_parameters_validate_names() {
+    type UInt64Array = diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::UInt64>;
+    let err = to_sql(&diesel::select(named_param::<UInt64Array, _>(
+        "bad-name",
+        vec![1_u64],
+    )))
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("invalid ClickHouse parameter name"),
+        "unexpected error: {err}"
     );
 }
 

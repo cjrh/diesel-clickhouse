@@ -153,6 +153,17 @@ let allowed_pair = array_exists2(
 );
 ```
 
+When SQL text stability or repeated references matter, use `named_param::<ST, _>("name", value)`. It renders `{name:Type}` and binds `param_name` through the async connection exactly once, even when the expression is cloned and used multiple times:
+
+```rust,ignore
+use diesel_clickhouse::{named_param, vector_dot_product_f32};
+
+type Float32Array = Array<diesel::sql_types::Float>;
+let q = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0]);
+let score = vector_dot_product_f32(documents::embedding, q.clone());
+let strong_match = vector_dot_product_f32(documents::embedding, q).gt(0.5_f32);
+```
+
 Prefer `when(enabled, predicate)` for optional filters when stable SQL text is not required: disabled branches render `1` and contribute no bind values, so later binds such as `LIMIT ?` keep their intended positions.
 
 Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, `if_`, `array_exists2` for two parallel arrays, and `vector_dot_product_f32` for `Array(Float32)` scoring. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier.

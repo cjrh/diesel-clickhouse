@@ -38,17 +38,17 @@ use diesel_clickhouse::{
     join_column, json_extract_int, json_extract_int_path, json_extract_string_path, json_has,
     json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, left_utf8, length,
     length_utf8, lower, mann_whitney_u_test, map_apply, map_contains, map_filter, max_if,
-    merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment, null_if,
-    partition_by, partition_expr, position, position_case_insensitive, prewhere, projection,
-    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
-    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number,
-    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
-    sip_hash64, source_column, stddev_pop, stddev_pop_stable, stddev_samp, substring, sum_merge,
-    sum_state, summing_merge_tree, to_date_time, to_float64, to_float64_or_null, to_int32,
-    to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null,
-    top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
-    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
-    vector_dot_product_f32, vector_f32, with_fill, xx_hash64,
+    merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment, named_param,
+    null_if, partition_by, partition_expr, position, position_case_insensitive, prewhere,
+    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
+    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
+    row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
+    simple_json_has, sip_hash64, source_column, stddev_pop, stddev_pop_stable, stddev_samp,
+    substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
+    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
+    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
+    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
+    var_pop, var_pop_stable, vector_dot_product_f32, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -878,6 +878,40 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .load(&mut conn)
             .await?;
         assert_eq!(vector_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+
+        let reusable_query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+        let named_vector_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(
+                vector_dot_product_f32(gold_documents::embedding, reusable_query_vector.clone())
+                    .gt(0.5_f32),
+            )
+            .select((
+                gold_documents::id,
+                expr_as(
+                    vector_dot_product_f32(gold_documents::embedding, reusable_query_vector),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(named_vector_scores, vec![(1, 1.0), (4, 0.9)]);
+
+        let conflicting_named_parameter = diesel::select((
+            named_param::<diesel_clickhouse::sql_types::UInt64, _>("same", 1_u64),
+            named_param::<diesel_clickhouse::sql_types::UInt64, _>("same", 2_u64),
+        ))
+        .load::<(u64, u64)>(&mut conn)
+        .await
+        .expect_err("conflicting named parameter values should fail before execution");
+        assert!(
+            conflicting_named_parameter
+                .to_string()
+                .contains("conflicting values for ClickHouse named parameter"),
+            "unexpected error: {conflicting_named_parameter}"
+        );
 
         let row_bridge_scores: Vec<ClickHouseDocumentScore> = conn
             .load_clickhouse_rows(
