@@ -28,6 +28,7 @@ For the model behind these recipes (execution modes, the safety trade-offs of `s
 | `expr AS name` | `expr_as(expr, "name")` |
 | `t.unsigned_col > 42` | `t::unsigned_col.gt(bind(42u64))` |
 | `optional WHERE col = v` | `when(flag, t::col.eq(v))` |
+| `ORDER BY score alias` | `alias_ref::<Float>("score").desc()` |
 | `Array(UInt64) bind` | `bind::<Array<UInt64>, _>(vec![...])` |
 | `raw function with a bind` | `sql::<T>("fn(").bind::<ST, _>(v).sql(")")` |
 | `{name:Type} (stable SQL text)` | `sql::<T>("{name:Type}") + .param(..)` |
@@ -658,7 +659,7 @@ Diesel:
 ```rust,ignore
 use diesel::dsl::sql;
 use diesel::sql_types::Float;
-use diesel_clickhouse::bind;
+use diesel_clickhouse::{alias_ref, bind};
 use diesel_clickhouse::sql_types::Array;
 
 type Float32Array = Array<Float>;
@@ -671,7 +672,7 @@ let rows: Vec<(u64, f32)> = documents::table
             .bind::<Float32Array, _>(bind::<Float32Array, _>(query_vector))
             .sql("))) AS score"),
     ))
-    .order(sql::<Float>("score").desc())
+    .order(alias_ref::<Float>("score").desc())
     .then_order_by(documents::id.asc())
     .load(&mut conn).await?;
 ```
@@ -679,7 +680,7 @@ let rows: Vec<(u64, f32)> = documents::table
 Rendered by `diesel-clickhouse`:
 
 ```sql
-SELECT `cookbook_documents`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ?))) AS score FROM `cookbook_documents` WHERE (`cookbook_documents`.`tenant_id` = ?) ORDER BY score DESC, `cookbook_documents`.`id` ASC
+SELECT `cookbook_documents`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ?))) AS score FROM `cookbook_documents` WHERE (`cookbook_documents`.`tenant_id` = ?) ORDER BY `score` DESC, `cookbook_documents`.`id` ASC
 ```
 
 Both the ClickHouse SQL and the Diesel query above return the same rows:

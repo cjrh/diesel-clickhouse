@@ -124,6 +124,41 @@ let allowed_pair = sql::<Bool>(
 
 Prefer `when(enabled, predicate)` for optional filters when stable SQL text is not required: disabled branches render `1` and contribute no bind values, so later binds such as `LIMIT ?` keep their intended positions.
 
+Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, and `if_`. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier.
+
+### Loading structs and wide rows
+
+For typed Diesel `select(...)` queries, derive `Queryable` and keep the Rust struct fields in select-list order:
+
+```rust,ignore
+#[derive(Queryable)]
+struct TenantOverview {
+    tenant_id: String,
+    n: u64,
+    ok: i64,
+}
+
+let rows: Vec<TenantOverview> = events::table
+    .group_by(events::tenant_id)
+    .select((events::tenant_id, expr_as(count(), "n"), expr_as(count_if(events::success), "ok")))
+    .load(&mut conn)
+    .await?;
+```
+
+For raw SQL, aliased expressions, or very wide result shapes, use `diesel::sql_query(...)` plus `QueryableByName` and annotate each field with its SQL type. This avoids Diesel's tuple arity pressure for 17+ column analytics rows and makes aliases explicit:
+
+```rust,ignore
+#[derive(QueryableByName)]
+struct DocumentHit {
+    #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+    id: u64,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    source_type: Option<String>,
+    #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
+    embedding: Vec<f32>,
+}
+```
+
 Enable native BigDecimal decimal values with:
 
 ```toml

@@ -304,6 +304,12 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `lengthUTF8(expr)`.
+    #[sql_name = "lengthUTF8"]
+    fn length_utf8<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::BigInt;
+}
+
+define_sql_function! {
     /// `empty(expr)`.
     #[sql_name = "empty"]
     fn empty<T: SqlType + SingleValue>(expr: T) -> diesel::sql_types::Bool;
@@ -346,9 +352,21 @@ define_sql_function! {
 }
 
 define_sql_function! {
+    /// `leftUTF8(expr, length)`.
+    #[sql_name = "leftUTF8"]
+    fn left_utf8<T: SqlType + SingleValue>(expr: T, length: diesel::sql_types::BigInt) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
     /// `position(haystack, needle)`.
     #[sql_name = "position"]
     fn position<T: SqlType + SingleValue>(haystack: T, needle: diesel::sql_types::Text) -> crate::types::UInt64;
+}
+
+define_sql_function! {
+    /// `positionCaseInsensitive(haystack, needle)`.
+    #[sql_name = "positionCaseInsensitive"]
+    fn position_case_insensitive<T: SqlType + SingleValue>(haystack: T, needle: diesel::sql_types::Text) -> crate::types::UInt64;
 }
 
 define_sql_function! {
@@ -361,6 +379,12 @@ define_sql_function! {
     /// `concat(left, right)`.
     #[sql_name = "concat"]
     fn concat<L: SqlType + SingleValue>(left: L, right: diesel::sql_types::Text) -> diesel::sql_types::Text;
+}
+
+define_sql_function! {
+    /// `nullIf(expr, null_value)`.
+    #[sql_name = "nullIf"]
+    fn null_if<T: SqlType + SingleValue>(expr: T, null_value: T) -> diesel::sql_types::Nullable<T>;
 }
 
 define_sql_function! {

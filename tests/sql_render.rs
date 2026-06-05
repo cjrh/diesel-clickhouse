@@ -3,7 +3,7 @@ use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
     Format, NestedField, OutfileCompression, OverDsl, Setting, TableEngine, TableIndex,
     VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
-    accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree,
+    accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree, alias_ref,
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
     approx_top_sum_with_reserved, array_all, array_count, array_exists, array_filter, array_map,
     avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, cast, ceil,
@@ -18,12 +18,13 @@ use diesel_clickhouse::{
     json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
     json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
     json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
-    length, like, like_escape, linf_distance, linf_norm, lower, mann_whitney_u_test, map_apply,
-    map_contains, map_filter, map_from_arrays, map_keys, map_values, max_merge, max_state,
-    min_merge, min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any,
-    multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any, multi_match_any_index,
-    mutation_assignment, not_ilike, not_ilike_escape, not_like, not_like_escape, partition_by,
-    partition_expr, partition_id, position, prewhere, projection, quantile, quantile_deterministic,
+    left_utf8, length, length_utf8, like, like_escape, linf_distance, linf_norm, lower,
+    mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
+    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
+    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
+    multi_match_any_index, mutation_assignment, not_ilike, not_ilike_escape, not_like,
+    not_like_escape, null_if, partition_by, partition_expr, partition_id, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
     quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample, sample_offset,
     simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64,
@@ -347,6 +348,24 @@ fn invalid_column_alias_is_rejected() {
 }
 
 #[test]
+fn renders_and_validates_alias_references() {
+    use self::events::dsl::*;
+
+    let query = events
+        .select(expr_as(latency_ms, "score"))
+        .order(alias_ref::<diesel::sql_types::Double>("score").desc());
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT `events`.`latency_ms` AS `score` FROM `events` ORDER BY `score` DESC"
+    );
+
+    let invalid = events
+        .select(expr_as(latency_ms, "score"))
+        .order(alias_ref::<diesel::sql_types::Double>("bad alias").desc());
+    assert!(to_sql(&invalid).is_err());
+}
+
+#[test]
 fn renders_string_numeric_and_conversion_functions() {
     use self::events::dsl::*;
 
@@ -354,9 +373,13 @@ fn renders_string_numeric_and_conversion_functions() {
         lower(tenant_id),
         upper(tenant_id),
         substring(tenant_id, 1_i64, 2_i64),
+        left_utf8(tenant_id, 2_i64),
+        length_utf8(tenant_id),
         position(tenant_id, "cm"),
+        position_case_insensitive(tenant_id, "AC"),
         replace_all(tenant_id, "ac", "AC"),
         concat(tenant_id, payload),
+        null_if(tenant_id, ""),
         regexp_match(tenant_id, "^ac"),
         to_uint64(latency_ms),
         to_int64(success),
@@ -374,7 +397,7 @@ fn renders_string_numeric_and_conversion_functions() {
 
     assert_eq!(
         to_sql(&string_query).unwrap(),
-        "SELECT lower(`events`.`tenant_id`), upper(`events`.`tenant_id`), substring(`events`.`tenant_id`, ?, ?), position(`events`.`tenant_id`, ?), replaceAll(`events`.`tenant_id`, ?, ?), concat(`events`.`tenant_id`, `events`.`payload`), match(`events`.`tenant_id`, ?), toUInt64(`events`.`latency_ms`), toInt64(`events`.`success`), toFloat64(`events`.`id`), toString(`events`.`id`) FROM `events`"
+        "SELECT lower(`events`.`tenant_id`), upper(`events`.`tenant_id`), substring(`events`.`tenant_id`, ?, ?), leftUTF8(`events`.`tenant_id`, ?), lengthUTF8(`events`.`tenant_id`), position(`events`.`tenant_id`, ?), positionCaseInsensitive(`events`.`tenant_id`, ?), replaceAll(`events`.`tenant_id`, ?, ?), concat(`events`.`tenant_id`, `events`.`payload`), nullIf(`events`.`tenant_id`, ?), match(`events`.`tenant_id`, ?), toUInt64(`events`.`latency_ms`), toInt64(`events`.`success`), toFloat64(`events`.`id`), toString(`events`.`id`) FROM `events`"
     );
     assert_eq!(
         to_sql(&numeric_query).unwrap(),

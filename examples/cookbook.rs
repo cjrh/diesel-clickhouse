@@ -22,8 +22,8 @@ use diesel::prelude::*;
 // async connection's `.load`/`.first` resolve unambiguously.
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
-    ClickHouseConnectionOptions, ClickHouseJoinDsl, bind, clickhouse, count, count_if, expr_as,
-    final_table, has, source_column, to_sql, to_sql_with_metadata, when,
+    ClickHouseConnectionOptions, ClickHouseJoinDsl, alias_ref, bind, clickhouse, count, count_if,
+    expr_as, final_table, has, source_column, to_sql, to_sql_with_metadata, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -545,7 +545,7 @@ async fn main() -> Result<()> {
             .bind::<Float32Array, _>(bind::<Float32Array, _>(query_vector))
             .sql("))) AS score"),
         ))
-        .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
         .then_order_by(documents::id.asc())
         .load(&mut conn)
         .await?;
@@ -561,7 +561,7 @@ async fn main() -> Result<()> {
                 .bind::<Float32Array, _>(bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]))
                 .sql("))) AS score"),
             ))
-            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(documents::id.asc()),
     )?);
     doc.shared_output(&parity(&orm, &raw));
@@ -767,6 +767,10 @@ fn intro(doc: &mut CookbookDoc) {
             ["expr AS name", "expr_as(expr, \"name\")"],
             ["t.unsigned_col > 42", "t::unsigned_col.gt(bind(42u64))"],
             ["optional WHERE col = v", "when(flag, t::col.eq(v))"],
+            [
+                "ORDER BY score alias",
+                "alias_ref::<Float>(\"score\").desc()",
+            ],
             ["Array(UInt64) bind", "bind::<Array<UInt64>, _>(vec![...])"],
             [
                 "raw function with a bind",
@@ -1137,7 +1141,7 @@ FROM cookbook_documents WHERE tenant_id = 'acme' ORDER BY score DESC, id ASC";
 
 const R_VECTOR_RUST: &str = r#"use diesel::dsl::sql;
 use diesel::sql_types::Float;
-use diesel_clickhouse::bind;
+use diesel_clickhouse::{alias_ref, bind};
 use diesel_clickhouse::sql_types::Array;
 
 type Float32Array = Array<Float>;
@@ -1150,7 +1154,7 @@ let rows: Vec<(u64, f32)> = documents::table
             .bind::<Float32Array, _>(bind::<Float32Array, _>(query_vector))
             .sql("))) AS score"),
     ))
-    .order(sql::<Float>("score").desc())
+    .order(alias_ref::<Float>("score").desc())
     .then_order_by(documents::id.asc())
     .load(&mut conn).await?;"#;
 

@@ -25,19 +25,20 @@ use testcontainers_modules::{
 use diesel_clickhouse::{
     AsyncClickHouseConnection, ClickHouseConnectionOptions, ClickHouseJoinDsl, ClickHouseQueryDsl,
     ClickHouseTextExpressionMethods, Column, DataType, NestedField, OverDsl, Setting, TableEngine,
-    TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table,
-    analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter, array_map,
-    base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count, count_if,
-    count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alias_ref,
+    alter_table, analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter,
+    array_map, base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count,
+    count_if, count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
     create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
     domain_without_www, expr_as, farm_fingerprint64, final_table, finalize_aggregation,
     first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
     ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
     is_ipv6_string, is_null, is_valid_json, join_column, json_extract_int, json_extract_int_path,
     json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
-    lambda2, least, length, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
-    max_if, merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment,
-    partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
+    lambda2, least, left_utf8, length, length_utf8, lower, mann_whitney_u_test, map_apply,
+    map_contains, map_filter, max_if, merge_tree, min_if, multi_match_any, multi_match_any_index,
+    mutation_assignment, null_if, partition_by, partition_expr, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
     quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
     simple_json_extract_string, simple_json_has, sip_hash64, source_column, stddev_pop,
@@ -753,6 +754,29 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .await?;
         assert_eq!(selected_by_parallel_string_arrays, vec![1, 3, 6]);
 
+        let helper_rows: Vec<(u32, String, Option<String>, i64)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(
+                position_case_insensitive(gold_documents::text, "RUST")
+                    .gt(diesel_clickhouse::bind(0_u64)),
+            )
+            .select((
+                gold_documents::id,
+                left_utf8(gold_documents::text, 4_i64),
+                null_if(gold_documents::source_type, ""),
+                length_utf8(gold_documents::text),
+            ))
+            .order(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            helper_rows,
+            vec![
+                (1, "Rust".to_string(), Some("blog".to_string()), 18),
+                (4, "rust".to_string(), Some("doc".to_string()), 22),
+            ]
+        );
+
         let vector_scores: Vec<(u32, f32)> = gold_documents::table
             .filter(gold_documents::tenant_id.eq("acme"))
             .select((
@@ -765,7 +789,7 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 ]))
                 .sql("))) AS score"),
             ))
-            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(gold_documents::id.asc())
             .load(&mut conn)
             .await?;

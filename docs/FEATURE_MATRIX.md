@@ -57,7 +57,7 @@ Legend:
 | ✅ 🧪 | Scalar `WITH` aliases | `diesel::select(sql("x")).with_alias(sql("1"), "x")` | `WITH 1 AS x SELECT x` |
 | ✅ 🧪 | `WHERE` | `events.filter(tenant_id.eq("acme").and(success.eq(true)))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ 🧪 | `HAVING` | `query.having(count_star().gt(1))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
-| ✅ 🧪 | `ORDER BY` | `query.order(created_at.desc())` | Diesel built-in, covered with ClickHouse rendering/live examples. |
+| ✅ 🧪 | `ORDER BY` | `query.order(created_at.desc())`, `query.order(alias_ref::<Double>("score").desc())` | Diesel built-in, plus validated alias references for ClickHouse `ORDER BY`/`GROUP BY` alias patterns. |
 | ✅ 🧪 | `LIMIT` / `OFFSET` | `query.limit(10).offset(20)` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ 🧪 | `LIMIT ... WITH TIES` | `query.limit(1).with_ties()` | `LIMIT ? WITH TIES` |
 | ✅ 🧪 | `LIMIT BY` | `query.limit_by_col(2, "tenant_id")` | `LIMIT 2 BY tenant_id` |
@@ -112,7 +112,7 @@ Legend:
 | ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_all` `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
 | ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
-| ✅ 🧪 | Strings | `lower` `upper` `substring` `position` `replace_all` `concat` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
+| ✅ 🧪 | Strings | `lower` `upper` `substring` `left_utf8` `length_utf8` `position` `position_case_insensitive` `replace_all` `concat` `null_if` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain` `domain_without_www` `top_level_domain` `url_path` `base64_encode` `hex` `city_hash64` `to_ipv4` `is_ipv6_string` | More specialized variants can be added by demand. |
 | ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int*` `to_uint*` `to_float*` `to_*_or_null` `to_*_or_zero` `to_string` `cast::<ST, _>(...)` `accurate_cast*` `is_null` `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
