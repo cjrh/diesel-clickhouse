@@ -12,7 +12,6 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ### Added
 - Async connection support for Diesel-owned array binds in the Carson-critical shapes: `Vec<u64>`/`Array(UInt64)`, `Vec<String>`/`Array(String)`, and `Vec<f32>`/`Array(Float32)`, covered by live ClickHouse tests for membership filters, parallel-array `arrayExists`, and vector scoring.
-- Downstream async-connection implementation plan in `docs/ASYNC_CONNECTION_DOWNSTREAM_PLAN.md`.
 - Targeted ClickHouse helpers for common Carson raw SQL patterns: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, and typed `alias_ref::<ST>(...)` for validated `ORDER BY`/`GROUP BY` alias references.
 - `InsertBatchOptions` and `AsyncClickHouseConnection::insert_batch_with_options(...)` for RowBinary insert send/end timeouts and per-insert settings, with table identifier validation.
 - `array_exists2(lambda2(...), left, right)` for ClickHouse `arrayExists` predicates over two parallel arrays while keeping both arrays as Diesel expressions/binds.
@@ -25,6 +24,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 ### Fixed
 - Added placeholder-mismatch tests for `AsyncClickHouseConnection` bind parameterization, covering both extra rendered placeholders and unused collected binds.
 - Added live coverage for raw SQL literal binds with repeated values and literal/comment `?` characters, plus `when(...)` optional predicates followed by a later `LIMIT` bind.
+- `insert_batch`/`insert_batch_with_options` now correctly handle database-qualified table names by escaping each identifier segment before using the `clickhouse` client's unescaped insert path.
+- Reserved the async connection's internal HTTP-parameter prefix so generated positional-bind parameters cannot collide with user-visible `named_param(...)` or raw `{name:Type}` parameters.
 
 ### Documentation
 - Clarified async bind ownership, array bind usage, `with_client(...)`, pooling trade-offs, and connection-level settings versus SQL `SETTINGS` in the usage/design docs and feature matrix.

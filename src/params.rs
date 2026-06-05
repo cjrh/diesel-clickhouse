@@ -20,6 +20,7 @@ use diesel::sql_types::{HasSqlType, SingleValue, SqlType};
 use crate::backend::ClickHouse;
 
 pub(crate) const NAMED_PARAMETER_MAGIC: &[u8] = b"DCH_NAMED_PARAM\0";
+pub(crate) const INTERNAL_PARAMETER_PREFIX: &str = "__diesel_clickhouse_";
 
 /// SQL type marker used internally for hidden named-parameter bind collection.
 #[derive(Debug, Clone, Copy, Default)]
@@ -174,6 +175,13 @@ where
 }
 
 fn validate_parameter_name(value: &str) -> QueryResult<()> {
+    if value.starts_with(INTERNAL_PARAMETER_PREFIX) {
+        return Err(Error::QueryBuilderError(
+            format!("ClickHouse parameter name uses reserved diesel-clickhouse prefix: {value:?}")
+                .into(),
+        ));
+    }
+
     let mut chars = value.chars();
     let Some(first) = chars.next() else {
         return Err(Error::QueryBuilderError(

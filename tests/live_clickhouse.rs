@@ -437,6 +437,16 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .await?;
         assert_eq!(rows, vec![("acme".to_string(), 2)]);
 
+        let settings_rows: Vec<i64> = events
+            .filter(tenant_id.eq("acme"))
+            .select(id)
+            .order(id.asc())
+            .limit(1_i64)
+            .settings([Setting::new("max_threads", 1)])
+            .load(&mut conn)
+            .await?;
+        assert_eq!(settings_rows, vec![1]);
+
         let tag_values: Vec<String> = events
             .filter(id.eq(1_i64))
             .select(tags)
@@ -1084,6 +1094,44 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 (12, "gamma".to_string()),
             ]
         );
+
+        diesel::sql_query("DROP DATABASE IF EXISTS diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query("CREATE DATABASE diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_batch_db.connection_batch (id Int64, tenant_id String) \
+             ENGINE = Memory",
+        )
+        .execute(&mut conn)
+        .await?;
+        let qualified_batch_count = conn
+            .insert_batch(
+                "diesel_clickhouse_batch_db.connection_batch",
+                vec![BatchRow {
+                    id: 20,
+                    tenant_id: "qualified".to_string(),
+                }],
+            )
+            .await?;
+        assert_eq!(qualified_batch_count, 1);
+        let qualified_rows: Vec<ConnectionRow> = diesel::sql_query(
+            "SELECT id, tenant_id FROM diesel_clickhouse_batch_db.connection_batch ORDER BY id",
+        )
+        .load(&mut conn)
+        .await?;
+        assert_eq!(
+            qualified_rows,
+            vec![ConnectionRow {
+                row_id: 20,
+                row_tenant_id: "qualified".to_string(),
+            }]
+        );
+        diesel::sql_query("DROP DATABASE diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
         diesel::sql_query("DROP TABLE diesel_clickhouse_connection_batch")
             .execute(&mut conn)
             .await?;

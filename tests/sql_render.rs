@@ -299,6 +299,17 @@ fn named_http_parameters_validate_names() {
             .contains("invalid ClickHouse parameter name"),
         "unexpected error: {err}"
     );
+
+    let err = to_sql(&diesel::select(named_param::<UInt64Array, _>(
+        "__diesel_clickhouse_p0",
+        vec![1_u64],
+    )))
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("reserved diesel-clickhouse prefix"),
+        "unexpected error: {err}"
+    );
 }
 
 #[test]

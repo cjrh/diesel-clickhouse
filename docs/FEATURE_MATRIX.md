@@ -131,7 +131,7 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
 | ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536)` `.distance(VectorDistanceFunction::CosineDistance)` | Render-tested; live fixture keeps exact search portable across server builds. |
 | ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
-| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render-tested. ClickHouse docs recommend true binary client parameters; the HTTP test client string-binds placeholders, so live coverage stays on exact vector literals. |
+| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render/client-specific. ClickHouse docs recommend true binary client parameters; the async connection's HTTP parameter path is textual, so async vector query values should use `Array(Float32)` binds/named parameters or a hex/client-specific binary path. |
 
 ## Aggregate functions and combinators
 

@@ -1,11 +1,11 @@
 //! Executable cookbook for `diesel-clickhouse`.
 //!
 //! Each "recipe" shows a piece of ClickHouse SQL next to the Diesel query that
-//! produces it. The example then runs **both**: the raw SQL through the official
-//! `clickhouse` client and the Diesel query through `AsyncClickHouseConnection`,
-//! and asserts the two return identical rows. Generating `docs/COOKBOOK.md` is
-//! therefore a live verification that every recipe's ORM form really is
-//! equivalent to its hand-written SQL — a wrong recipe fails the build.
+//! produces it. For result-returning recipes, the example runs **both**: the raw
+//! SQL through the official `clickhouse` client and the Diesel query through
+//! `AsyncClickHouseConnection`, then asserts the two return identical rows.
+//! Render-only recipes are marked as such. Generating `docs/COOKBOOK.md` is
+//! therefore a live verification of each executable recipe's ORM form.
 //!
 //! ```text
 //! CLICKHOUSE_URL=http://default:password@localhost:8123/default \
@@ -318,35 +318,43 @@ async fn main() -> Result<()> {
         "Stable SQL text with ClickHouse named parameters",
         "When the SQL string must stay byte-for-byte identical across calls — so \
          ClickHouse's query cache hits, or a parameterized view sees one query — \
-         use a ClickHouse named parameter (`{name:Type}`). It can be referenced \
-         many times in the text but is bound once with the client's `.param(...)`, \
-         which makes it a tidy fit for the optional-filter sentinel: an empty value \
-         leaves `'' = ''` true and disables the filter, a non-empty value enforces \
-         it, and the SQL text never changes. The `{name:Type}` string is raw, so \
-         its contents are unchecked; `to_sql_with_metadata(...).named_parameters()` \
-         reports the names so a test can assert your `.param(...)` calls line up.",
+         use `named_param::<ST, _>(\"name\", value)`. It renders ClickHouse's \
+         `{name:Type}` syntax, can be referenced many times in the query, and is \
+         still bound through `AsyncClickHouseConnection` rather than through an \
+         external `.param(...)` call. This makes it a tidy fit for the \
+         optional-filter sentinel: an empty value leaves `'' = ''` true and \
+         disables the filter, a non-empty value enforces it, and the SQL text \
+         stays stable.",
     );
     doc.sql(R_NAMED_SQL);
     doc.diesel(R_NAMED_RUST);
+    let tenant_param = named_param::<diesel::sql_types::Text, _>("tenant", "acme");
     let named_query = events::table
         .select((events::id, events::tenant_id))
-        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "({tenant:String} = '' OR tenant_id = {tenant:String})",
-        ))
+        .filter(
+            tenant_param
+                .clone()
+                .eq(diesel::dsl::sql::<diesel::sql_types::Text>("''"))
+                .or(events::tenant_id.eq(tenant_param)),
+        )
         .order(events::id.asc());
     let rendered = to_sql_with_metadata(&named_query)?;
     assert_eq!(rendered.named_parameters(), &["tenant"]);
     doc.rendered(&rendered.sql);
-    // One stable SQL string, bound by name. An empty value disables the filter.
-    let enabled: Vec<(u64, String)> = client
-        .query(&rendered.sql)
-        .param("tenant", "acme")
-        .fetch_all()
-        .await?;
-    let disabled: Vec<(u64, String)> = client
-        .query(&rendered.sql)
-        .param("tenant", "")
-        .fetch_all()
+    // One stable SQL string, bound by name through the async connection. An
+    // empty value disables the filter.
+    let enabled: Vec<(u64, String)> = named_query.load(&mut conn).await?;
+    let disabled_param = named_param::<diesel::sql_types::Text, _>("tenant", "");
+    let disabled: Vec<(u64, String)> = events::table
+        .select((events::id, events::tenant_id))
+        .filter(
+            disabled_param
+                .clone()
+                .eq(diesel::dsl::sql::<diesel::sql_types::Text>("''"))
+                .or(events::tenant_id.eq(disabled_param)),
+        )
+        .order(events::id.asc())
+        .load(&mut conn)
         .await?;
     doc.text_output(&format!(
         "named parameters: {:?}\n\ntenant = \"acme\" -> {enabled:#?}\n\ntenant = \"\" matches all {} rows",
@@ -357,14 +365,16 @@ async fn main() -> Result<()> {
     // ----- Recipe: raw fragments with Diesel-owned binds --------------------
     doc.recipe(
         "Raw SQL fragments with Diesel-owned binds",
-        "When a ClickHouse function has no typed helper yet, build the raw \
-         fragment with Diesel's SQL literal binder: start with `sql::<T>(...)`, \
+        "When you must use a raw fragment, build it with Diesel's SQL literal \
+         binder: start with `sql::<T>(...)`, \
          call `.bind::<SqlType, _>(value)` at the exact point where the value \
          belongs, then continue with `.sql(...)`. Do not put a bare `?` inside \
          `sql::<T>(\"...\")` and bind it later through another client; that \
          reintroduces the ordering hazard this connection is meant to remove. \
          Literal question marks inside strings or comments are ignored by the \
-         async connection's placeholder scanner.",
+         async connection's placeholder scanner. This recipe intentionally keeps \
+         the function calls raw to show bind placement; prefer typed helpers when \
+         one exists.",
     );
     doc.sql(R_RAW_BIND_SQL);
     doc.diesel(R_RAW_BIND_RUST);
@@ -381,7 +391,7 @@ async fn main() -> Result<()> {
         .filter(documents::tenant_id.eq("acme"))
         .filter(match_filter)
         .select((documents::id, documents::text, score_expr))
-        .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
         .then_order_by(documents::processed_at.desc())
         .then_order_by(documents::id.asc())
         .limit(10_i64)
@@ -405,7 +415,7 @@ async fn main() -> Result<()> {
                 .bind::<diesel::sql_types::Text, _>(needle)
                 .sql(") > 0, 1, 0)) AS score"),
             ))
-            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(documents::processed_at.desc())
             .then_order_by(documents::id.asc())
             .limit(10_i64),
@@ -535,7 +545,8 @@ async fn main() -> Result<()> {
          membership filters and higher-order array predicates do not need \
          external `.param(...)` calls. Use `bind::<Array<T>, _>(vec)` for a typed \
          array expression; `array_exists2(lambda2(...), left, right)` covers the \
-         common parallel-array predicate shape.",
+         common parallel-array predicate shape. The lambda body remains an explicit \
+         ClickHouse SQL fragment, so keep it short and local.",
     );
     doc.sql(R_ARRAY_PARAM_SQL);
     doc.diesel(R_ARRAY_PARAM_RUST);
@@ -754,10 +765,11 @@ async fn main() -> Result<()> {
         "When raw SQL is the right call — and what you give up",
         "Reach for `sql::<T>(...)` only when ClickHouse's grammar has no typed \
          binding — for example an `ASOF` join whose `ON` mixes equality and \
-         inequality across columns. The expression's result type (`<T>`) is still \
-         checked, but its **contents are not**: column names, operators, and \
-         table references inside the string are opaque to the compiler, so a typo \
-         surfaces only at runtime. Keep these strings small and local.",
+         inequality across columns. This recipe is render-only because the exact \
+         ASOF shape is schema/data dependent. The expression's result type (`<T>`) \
+         is still checked, but its **contents are not**: column names, operators, \
+         and table references inside the string are opaque to the compiler, so a \
+         typo surfaces only at runtime. Keep these strings small and local.",
     );
     doc.sql(R_RAW_SQL);
     doc.diesel(R_RAW_RUST);
@@ -803,10 +815,11 @@ fn intro(doc: &mut CookbookDoc) {
     doc.heading(1, "Cookbook");
     doc.paragraph(
         "Copy-paste recipes for common ClickHouse queries, each shown as raw SQL \
-         next to the equivalent Diesel query. Every recipe below was generated by \
-         running **both** forms against a live ClickHouse server and asserting \
-         they return identical rows — see `examples/cookbook.rs`. If a recipe's \
-         two forms ever diverge, the document fails to build.",
+         next to the equivalent Diesel query. Result-returning recipes are \
+         generated by running **both** forms against a live ClickHouse server and \
+         asserting they return identical rows; render-only recipes are marked as \
+         such — see `examples/cookbook.rs`. If an executable recipe's two forms \
+         ever diverge, the document fails to build.",
     );
     doc.paragraph(
         "For the model behind these recipes (execution modes, the safety \
@@ -856,7 +869,7 @@ fn intro(doc: &mut CookbookDoc) {
             ],
             [
                 "{name:Type} (stable SQL text)",
-                "sql::<T>(\"{name:Type}\") + .param(..)",
+                "named_param::<Type, _>(\"name\", value)",
             ],
             ["bare t.col from a custom source", "source_column(t::col)"],
             ["FORMAT JSONEachRow", ".format(Format::JsonEachRow)"],
@@ -1110,23 +1123,22 @@ const R_NAMED_SQL: &str = "SELECT id, tenant_id FROM cookbook_events \
 WHERE ({tenant:String} = '' OR tenant_id = {tenant:String}) ORDER BY id";
 
 const R_NAMED_RUST: &str = r#"use diesel::dsl::sql;
-use diesel::sql_types::Bool;
-use diesel_clickhouse::to_sql_with_metadata;
+use diesel::sql_types::Text;
+use diesel_clickhouse::named_param;
 
-// `{tenant:String}` appears twice in the text but is bound once, so the SQL
-// string is identical for every tenant (and "" disables the filter).
-let query = events::table
+// `{tenant:String}` appears twice in the text but is bound once by the async
+// connection; "" disables the filter.
+let tenant = named_param::<Text, _>("tenant", "acme");
+let rows: Vec<(u64, String)> = events::table
     .select((events::id, events::tenant_id))
-    .filter(sql::<Bool>("({tenant:String} = '' OR tenant_id = {tenant:String})"))
-    .order(events::id.asc());
-
-let rendered = to_sql_with_metadata(&query)?;
-assert_eq!(rendered.named_parameters(), &["tenant"]);
-
-let rows: Vec<(u64, String)> = client
-    .query(&rendered.sql)
-    .param("tenant", "acme") // bind once by name; "" matches all rows
-    .fetch_all().await?;"#;
+    .filter(
+        tenant
+            .clone()
+            .eq(sql::<Text>("''"))
+            .or(events::tenant_id.eq(tenant)),
+    )
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
 
 const R_RAW_BIND_SQL: &str = "SELECT id, text, \
 toFloat32(if(positionCaseInsensitive(text, 'rust') > 0, 1, 0)) AS score \
@@ -1136,6 +1148,7 @@ ORDER BY score DESC, processed_at DESC, id ASC LIMIT 10";
 
 const R_RAW_BIND_RUST: &str = r#"use diesel::dsl::sql;
 use diesel::sql_types::{Bool, Float, Text};
+use diesel_clickhouse::alias_ref;
 
 let needle = "rust";
 let score = sql::<Float>("toFloat32(if(positionCaseInsensitive(text, ")
@@ -1149,7 +1162,7 @@ let rows: Vec<(u64, String, f32)> = documents::table
     .filter(documents::tenant_id.eq("acme"))
     .filter(matches)
     .select((documents::id, documents::text, score))
-    .order(sql::<Float>("score").desc())
+    .order(alias_ref::<Float>("score").desc())
     .then_order_by(documents::processed_at.desc())
     .then_order_by(documents::id.asc())
     .limit(10_i64)

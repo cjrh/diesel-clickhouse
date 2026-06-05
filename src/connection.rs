@@ -35,8 +35,10 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt};
 
-use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata};
-use crate::params::split_named_parameter_bind;
+use crate::backend::{
+    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, analyze_rendered_sql,
+};
+use crate::params::{INTERNAL_PARAMETER_PREFIX, split_named_parameter_bind};
 
 /// A native async Diesel connection for ClickHouse over HTTP.
 ///
@@ -341,10 +343,10 @@ impl AsyncClickHouseConnection {
         Row: clickhouse::RowOwned + clickhouse::RowWrite,
         Rows: IntoIterator<Item = Row>,
     {
-        validate_table_identifier(table)?;
+        let escaped_table = escaped_table_identifier(table)?;
         let mut insert = self
             .client
-            .insert::<Row>(table)
+            .insert_unescaped::<Row>(&escaped_table)
             .await
             .map_err(clickhouse_error)?;
         if options.send_timeout.is_some() || options.end_timeout.is_some() {
@@ -723,17 +725,24 @@ fn database_from_path(parsed: &url::Url) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn validate_table_identifier(table: &str) -> QueryResult<()> {
+fn escaped_table_identifier(table: &str) -> QueryResult<String> {
     if table.trim() != table || table.is_empty() {
         return Err(Error::QueryBuilderError(
             format!("invalid ClickHouse table name: {table:?}").into(),
         ));
     }
 
-    for segment in table.split('.') {
+    let mut escaped = String::with_capacity(table.len() + 2);
+    for (idx, segment) in table.split('.').enumerate() {
         validate_bare_identifier(segment, "table identifier")?;
+        if idx > 0 {
+            escaped.push('.');
+        }
+        escaped.push('`');
+        escaped.push_str(segment);
+        escaped.push('`');
     }
-    Ok(())
+    Ok(escaped)
 }
 
 fn validate_bare_identifier(value: &str, kind: &str) -> QueryResult<()> {
@@ -776,6 +785,8 @@ fn parameterize_binds(
     metadata: &[ClickHouseTypeMetadata],
     binds: &[Option<Vec<u8>>],
 ) -> QueryResult<PreparedQuery> {
+    reject_reserved_sql_parameters(sql)?;
+
     let mut result = String::with_capacity(sql.len());
     let mut params = Vec::new();
     let positional_binds = collect_named_parameters(&mut params, metadata, binds)?;
@@ -916,6 +927,23 @@ fn parameterize_binds(
         sql: result,
         params,
     })
+}
+
+fn reject_reserved_sql_parameters(sql: &str) -> QueryResult<()> {
+    let rendered_metadata = analyze_rendered_sql(sql);
+    if let Some(parameter) = rendered_metadata
+        .named_parameters
+        .iter()
+        .find(|name| name.starts_with(INTERNAL_PARAMETER_PREFIX))
+    {
+        return Err(Error::QueryBuilderError(
+            format!(
+                "ClickHouse parameter name uses reserved diesel-clickhouse prefix: {parameter:?}"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
 }
 
 fn collect_named_parameters(
@@ -1167,7 +1195,7 @@ fn push_bind_parameter_or_literal(
         return Ok(());
     };
     let parameter_value = server_parameter_value(bind_metadata.name, bind)?;
-    let parameter_name = format!("dc_p{bind_idx}");
+    let parameter_name = format!("{INTERNAL_PARAMETER_PREFIX}p{bind_idx}");
 
     result.push('{');
     result.push_str(&parameter_name);
@@ -1575,8 +1603,11 @@ mod tests {
 
     #[test]
     fn validate_table_identifier_accepts_bare_and_qualified_names() {
-        validate_table_identifier("events").unwrap();
-        validate_table_identifier("analytics.events").unwrap();
+        assert_eq!(escaped_table_identifier("events").unwrap(), "`events`");
+        assert_eq!(
+            escaped_table_identifier("analytics.events").unwrap(),
+            "`analytics`.`events`"
+        );
     }
 
     #[test]
@@ -1589,7 +1620,7 @@ mod tests {
             "bad-name",
         ] {
             assert!(
-                validate_table_identifier(table).is_err(),
+                escaped_table_identifier(table).is_err(),
                 "{table:?} should be rejected"
             );
         }
@@ -1645,13 +1676,16 @@ mod tests {
 
         assert_eq!(
             prepared.sql,
-            "SELECT '?' AS literal, {dc_p0:String} AS name, {dc_p1:Int32} AS age"
+            "SELECT '?' AS literal, {__diesel_clickhouse_p0:String} AS name, {__diesel_clickhouse_p1:Int32} AS age"
         );
         assert_eq!(
             prepared.params,
             vec![
-                ("param_dc_p0".to_string(), "O\\'Reilly?".to_string()),
-                ("param_dc_p1".to_string(), "42".to_string()),
+                (
+                    "param___diesel_clickhouse_p0".to_string(),
+                    "O\\'Reilly?".to_string()
+                ),
+                ("param___diesel_clickhouse_p1".to_string(), "42".to_string()),
             ]
         );
     }
@@ -1681,11 +1715,26 @@ mod tests {
 
         assert_eq!(
             prepared.sql,
-            "SELECT has({dc_p0:Array(UInt64)}, toUInt64(2))"
+            "SELECT has({__diesel_clickhouse_p0:Array(UInt64)}, toUInt64(2))"
         );
         assert_eq!(
             prepared.params,
-            vec![("param_dc_p0".to_string(), "[1,2,3]".to_string())]
+            vec![(
+                "param___diesel_clickhouse_p0".to_string(),
+                "[1,2,3]".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_reserved_raw_parameters() {
+        let err = parameterize_binds("SELECT {__diesel_clickhouse_p0:String}", &[], &[])
+            .expect_err("reserved raw parameter names should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("reserved diesel-clickhouse prefix"),
+            "unexpected error: {err}"
         );
     }
 
