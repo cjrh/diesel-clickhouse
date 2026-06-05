@@ -615,23 +615,30 @@ async fn main() -> Result<()> {
         "Render SQL for another client with `to_sql_with_metadata`",
         "When you execute through a ClickHouse client other than \
          `AsyncClickHouseConnection`, render the query and inspect its \
-         placeholders. `to_sql_with_metadata` reports the positional `?` count \
-         and any named HTTP parameters, so a test can assert your `.bind(...)` \
-         calls line up. Remember: `to_sql` renders only the SQL — the Diesel \
-         bind values stay behind, so you re-supply them in render order.",
+         placeholders. `to_sql_with_metadata` reports the positional `?` count, \
+         Diesel-collected positional bind types, and any named HTTP parameter \
+         names/types/occurrence counts, so a test can assert your `.bind(...)` \
+         and `.param(...)` calls line up. Remember: `to_sql` renders only the \
+         SQL — the Diesel bind values stay behind, so you re-supply them in \
+         render order.",
     );
     let rendered = to_sql_with_metadata(
         &events::table
             .filter(events::tenant_id.eq("acme"))
             .filter(events::success.eq(true))
+            .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                "has({allowed:Array(String)}, tags)",
+            ))
             .select(events::id),
     )?;
     doc.diesel(R_METADATA_RUST);
     doc.rendered(&rendered.sql);
     doc.text_output(&format!(
-        "positional `?` placeholders: {}\nnamed parameters: {:?}",
+        "positional `?` placeholders: {}\npositional bind types: {:?}\nnamed parameters: {:?}\nnamed parameter details: {:?}",
         rendered.positional_bind_count(),
+        rendered.positional_bind_types(),
         rendered.named_parameters(),
+        rendered.named_parameter_details(),
     ));
 
     // ----- Recipe: inserts --------------------------------------------------
@@ -1192,12 +1199,17 @@ const R_METADATA_RUST: &str = r#"use diesel_clickhouse::to_sql_with_metadata;
 let query = events::table
     .filter(events::tenant_id.eq("acme"))
     .filter(events::success.eq(true))
+    .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+        "has({allowed:Array(String)}, tags)",
+    ))
     .select(events::id);
 
 let rendered = to_sql_with_metadata(&query)?;
-// rendered.sql                      -> the SQL string, with `?` placeholders
-// rendered.positional_bind_count()  -> how many values to bind, in order
-// rendered.named_parameters()       -> ClickHouse {name:Type} HTTP params"#;
+// rendered.sql                         -> the SQL string, with `?` placeholders
+// rendered.positional_bind_count()     -> how many values to bind, in order
+// rendered.positional_bind_types()     -> ClickHouse type per Diesel bind
+// rendered.named_parameters()          -> unique ClickHouse {name:Type} names
+// rendered.named_parameter_details()   -> name/type/occurrence-count summaries"#;
 
 const R_INSERT_RUST: &str = r#"// Single row, through Diesel:
 diesel::insert_into(tenants::table)

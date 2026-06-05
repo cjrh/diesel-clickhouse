@@ -383,15 +383,17 @@ Use `alias_source(source, "e")` or `.alias_source("e")` when ClickHouse-specific
 
 ## Rendered SQL metadata
 
-`to_sql_with_metadata(&query)` returns the same SQL string as `to_sql(&query)` plus a lightweight scan of placeholders outside quoted strings/comments:
+`to_sql_with_metadata(&query)` returns the same SQL string as `to_sql(&query)` plus placeholder metadata outside quoted strings/comments:
 
 ```rust,ignore
 let rendered = diesel_clickhouse::to_sql_with_metadata(&query)?;
 assert_eq!(rendered.positional_bind_count(), 2);
-assert_eq!(rendered.named_parameters(), &["tenant_id"]);
+assert_eq!(rendered.positional_bind_types(), &["String", "Bool"]);
+assert_eq!(rendered.named_parameters(), &["allowed"]);
+assert_eq!(rendered.named_parameter_details()[0].type_name, "Array(String)");
 ```
 
-This helper is useful when rendering a Diesel AST with `to_sql` and then executing it through `diesel_clickhouse::clickhouse::Client`: tests can assert that every rendered positional placeholder has a matching `.bind(...)` call and every ClickHouse HTTP parameter (`{name:Type}`) has a matching `.param(...)` call.
+This helper is useful when rendering a Diesel AST with `to_sql` and then executing it through `diesel_clickhouse::clickhouse::Client`: tests can assert that every rendered positional placeholder has a matching `.bind(...)` call with the expected ClickHouse type, and every ClickHouse HTTP parameter (`{name:Type}`) has a matching `.param(...)` call. It is still a verification aid, not bind ownership; only `AsyncClickHouseConnection` carries the Diesel-collected values into execution.
 
 ## Render-only and client-dependent areas
 

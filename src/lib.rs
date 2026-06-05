@@ -96,8 +96,8 @@ pub use aggregates::{
     quantile_tdigest, quantile_timing, quantiles, quantiles_timing, top_k,
 };
 pub use backend::{
-    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, RenderedSql, RenderedSqlMetadata,
-    analyze_rendered_sql, to_sql, to_sql_with_metadata,
+    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, NamedParameterMetadata,
+    RenderedSql, RenderedSqlMetadata, analyze_rendered_sql, to_sql, to_sql_with_metadata,
 };
 pub use bind::{BoundValue, bind};
 pub use cast::{

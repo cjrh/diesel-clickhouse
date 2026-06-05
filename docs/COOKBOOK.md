@@ -789,7 +789,7 @@ raw/aliased document rows: [
 
 ### Render SQL for another client with `to_sql_with_metadata`
 
-When you execute through a ClickHouse client other than `AsyncClickHouseConnection`, render the query and inspect its placeholders. `to_sql_with_metadata` reports the positional `?` count and any named HTTP parameters, so a test can assert your `.bind(...)` calls line up. Remember: `to_sql` renders only the SQL — the Diesel bind values stay behind, so you re-supply them in render order.
+When you execute through a ClickHouse client other than `AsyncClickHouseConnection`, render the query and inspect its placeholders. `to_sql_with_metadata` reports the positional `?` count, Diesel-collected positional bind types, and any named HTTP parameter names/types/occurrence counts, so a test can assert your `.bind(...)` and `.param(...)` calls line up. Remember: `to_sql` renders only the SQL — the Diesel bind values stay behind, so you re-supply them in render order.
 
 Diesel:
 
@@ -799,25 +799,32 @@ use diesel_clickhouse::to_sql_with_metadata;
 let query = events::table
     .filter(events::tenant_id.eq("acme"))
     .filter(events::success.eq(true))
+    .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+        "has({allowed:Array(String)}, tags)",
+    ))
     .select(events::id);
 
 let rendered = to_sql_with_metadata(&query)?;
-// rendered.sql                      -> the SQL string, with `?` placeholders
-// rendered.positional_bind_count()  -> how many values to bind, in order
-// rendered.named_parameters()       -> ClickHouse {name:Type} HTTP params
+// rendered.sql                         -> the SQL string, with `?` placeholders
+// rendered.positional_bind_count()     -> how many values to bind, in order
+// rendered.positional_bind_types()     -> ClickHouse type per Diesel bind
+// rendered.named_parameters()          -> unique ClickHouse {name:Type} names
+// rendered.named_parameter_details()   -> name/type/occurrence-count summaries
 ```
 
 Rendered by `diesel-clickhouse`:
 
 ```sql
-SELECT `cookbook_events`.`id` FROM `cookbook_events` WHERE ((`cookbook_events`.`tenant_id` = ?) AND (`cookbook_events`.`success` = ?))
+SELECT `cookbook_events`.`id` FROM `cookbook_events` WHERE (((`cookbook_events`.`tenant_id` = ?) AND (`cookbook_events`.`success` = ?)) AND has({allowed:Array(String)}, tags))
 ```
 
 Output from this run:
 
 ```text
 positional `?` placeholders: 2
-named parameters: []
+positional bind types: ["String", "Bool"]
+named parameters: ["allowed"]
+named parameter details: [NamedParameterMetadata { name: "allowed", type_name: "Array(String)", occurrences: 1 }]
 ```
 
 

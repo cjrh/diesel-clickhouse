@@ -1,8 +1,8 @@
 use diesel::prelude::*;
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
-    Format, NestedField, OutfileCompression, OverDsl, Setting, TableEngine, TableIndex,
-    VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
+    Format, NamedParameterMetadata, NestedField, OutfileCompression, OverDsl, Setting, TableEngine,
+    TableIndex, VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
     accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree, alias_ref,
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
     approx_top_sum_with_reserved, array_all, array_count, array_exists, array_exists2,
@@ -256,20 +256,45 @@ fn renders_array_join_clause() {
 fn rendered_sql_reports_bind_metadata() {
     use self::events::dsl::*;
 
+    type TextArray = diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>;
+
     let query = events
         .select((
             id,
             diesel::dsl::sql::<diesel::sql_types::Text>("{bucket:String}"),
         ))
         .filter(tenant_id.eq("acme"))
+        .filter(array_exists(
+            lambda("tag", "tag = 'paid'"),
+            diesel_clickhouse::bind::<TextArray, _>(vec!["paid".to_owned()]),
+        ))
         .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "has({allowed:Array(String)}, tags) AND payload != '?'",
+            "(has({allowed:Array(String)}, tags) OR has({allowed:Array(String)}, tags)) AND payload != '?'",
         ))
         .limit(5);
     let rendered = to_sql_with_metadata(&query).unwrap();
 
-    assert_eq!(rendered.positional_bind_count(), 2);
+    assert_eq!(rendered.positional_bind_count(), 3);
+    assert_eq!(
+        rendered.positional_bind_types(),
+        &["String", "Array(String)", "Int64"]
+    );
     assert_eq!(rendered.named_parameters(), &["bucket", "allowed"]);
+    assert_eq!(
+        rendered.named_parameter_details(),
+        &[
+            NamedParameterMetadata {
+                name: "bucket".to_owned(),
+                type_name: "String".to_owned(),
+                occurrences: 1,
+            },
+            NamedParameterMetadata {
+                name: "allowed".to_owned(),
+                type_name: "Array(String)".to_owned(),
+                occurrences: 2,
+            },
+        ]
+    );
 }
 
 #[test]
@@ -281,7 +306,16 @@ fn scanner_ignores_placeholders_inside_quotes_and_comments() {
     let meta = analyze_rendered_sql(sql);
 
     assert_eq!(meta.positional_bind_count, 1);
+    assert!(meta.positional_bind_types.is_empty());
     assert_eq!(meta.named_parameters, vec!["real".to_string()]);
+    assert_eq!(
+        meta.named_parameter_details,
+        vec![NamedParameterMetadata {
+            name: "real".to_string(),
+            type_name: "Int".to_string(),
+            occurrences: 1,
+        }]
+    );
 }
 
 #[test]
@@ -292,16 +326,38 @@ fn scanner_handles_doubled_and_escaped_quotes() {
     let meta = analyze_rendered_sql("'it''s ? a \\' test' || 'x' || ?");
 
     assert_eq!(meta.positional_bind_count, 1);
+    assert!(meta.positional_bind_types.is_empty());
     assert!(meta.named_parameters.is_empty());
+    assert!(meta.named_parameter_details.is_empty());
 }
 
 #[test]
 fn scanner_dedupes_named_parameters_in_first_seen_order() {
-    let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int}");
+    let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int} AND {b:String}");
 
     assert_eq!(
         meta.named_parameters,
         vec!["b".to_string(), "a".to_string()]
+    );
+    assert_eq!(
+        meta.named_parameter_details,
+        vec![
+            NamedParameterMetadata {
+                name: "b".to_string(),
+                type_name: "Int".to_string(),
+                occurrences: 2,
+            },
+            NamedParameterMetadata {
+                name: "a".to_string(),
+                type_name: "Int".to_string(),
+                occurrences: 2,
+            },
+            NamedParameterMetadata {
+                name: "b".to_string(),
+                type_name: "String".to_string(),
+                occurrences: 1,
+            },
+        ]
     );
 }
 
@@ -309,9 +365,10 @@ fn scanner_dedupes_named_parameters_in_first_seen_order() {
 fn scanner_rejects_malformed_named_parameters() {
     // `{` that is not a well-formed `{name:Type}` parameter (digit-led name,
     // missing colon, unterminated) must not be reported as a parameter.
-    let meta = analyze_rendered_sql("{1bad:Int} {nocolon} {open:Int");
+    let meta = analyze_rendered_sql("{1bad:Int} {nocolon} {open:Int {empty:}");
 
     assert!(meta.named_parameters.is_empty());
+    assert!(meta.named_parameter_details.is_empty());
 }
 
 #[test]
