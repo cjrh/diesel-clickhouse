@@ -3,7 +3,9 @@
 use std::marker::PhantomData;
 
 use diesel::backend::Backend;
-use diesel::expression::{AppearsOnTable, Expression, SelectableExpression, ValidGrouping};
+use diesel::expression::{
+    AppearsOnTable, Expression, MixedAggregates, SelectableExpression, ValidGrouping,
+};
 use diesel::query_builder::{AstPass, QueryFragment, QueryId};
 use diesel::result::{Error, QueryResult};
 use diesel::sql_types::{Double, Float, SqlType};
@@ -44,6 +46,23 @@ where
     Expr: Expression,
 {
     VectorBytes::new(bytes, "Float64", VectorBytesEncoding::Raw)
+}
+
+/// Render a Float32 vector dot product as a `Float32` score.
+///
+/// This expands to ClickHouse's stable array primitives:
+/// `toFloat32(arraySum(arrayMap((x, y) -> x * y, left, right)))`. It is useful
+/// when exact vector scoring should keep the query vector as a Diesel-owned
+/// `Array(Float32)` bind instead of assembling the `arrayMap` call by hand.
+pub fn vector_dot_product_f32<Left, Right>(
+    left: Left,
+    right: Right,
+) -> VectorDotProductF32<Left, Right>
+where
+    Left: Expression<SqlType = Array<Float>>,
+    Right: Expression<SqlType = Array<Float>>,
+{
+    VectorDotProductF32 { left, right }
 }
 
 /// Decode a hex string expression with `unhex` and reinterpret it as `Array(Float32)`.
@@ -110,6 +129,13 @@ pub struct VectorBytes<Expr, ST> {
     _sql_type: PhantomData<ST>,
 }
 
+/// ClickHouse Float32 dot-product expression.
+#[derive(Debug, Clone)]
+pub struct VectorDotProductF32<Left, Right> {
+    left: Left,
+    right: Right,
+}
+
 /// How the input expression should be decoded before reinterpretation.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum VectorBytesEncoding {
@@ -154,6 +180,14 @@ where
     type SqlType = Array<ST>;
 }
 
+impl<Left, Right> Expression for VectorDotProductF32<Left, Right>
+where
+    Left: Expression<SqlType = Array<Float>>,
+    Right: Expression<SqlType = Array<Float>>,
+{
+    type SqlType = Float;
+}
+
 impl<ST, GB> ValidGrouping<GB> for VectorLiteral<ST> {
     type IsAggregate = diesel::expression::is_aggregate::No;
 }
@@ -165,6 +199,15 @@ where
     type IsAggregate = Expr::IsAggregate;
 }
 
+impl<Left, Right, GB> ValidGrouping<GB> for VectorDotProductF32<Left, Right>
+where
+    Left: ValidGrouping<GB>,
+    Right: ValidGrouping<GB>,
+    Left::IsAggregate: MixedAggregates<Right::IsAggregate>,
+{
+    type IsAggregate = <Left::IsAggregate as MixedAggregates<Right::IsAggregate>>::Output;
+}
+
 impl<ST, QS> AppearsOnTable<QS> for VectorLiteral<ST> where Self: Expression {}
 impl<Expr, ST, QS> AppearsOnTable<QS> for VectorBytes<Expr, ST>
 where
@@ -174,6 +217,17 @@ where
 }
 impl<ST, QS> SelectableExpression<QS> for VectorLiteral<ST> where Self: AppearsOnTable<QS> {}
 impl<Expr, ST, QS> SelectableExpression<QS> for VectorBytes<Expr, ST> where Self: AppearsOnTable<QS> {}
+impl<Left, Right, QS> AppearsOnTable<QS> for VectorDotProductF32<Left, Right>
+where
+    Left: AppearsOnTable<QS>,
+    Right: AppearsOnTable<QS>,
+    Self: Expression,
+{
+}
+impl<Left, Right, QS> SelectableExpression<QS> for VectorDotProductF32<Left, Right> where
+    Self: AppearsOnTable<QS>
+{
+}
 
 impl<ST> QueryId for VectorLiteral<ST> {
     type QueryId = ();
@@ -181,6 +235,11 @@ impl<ST> QueryId for VectorLiteral<ST> {
 }
 
 impl<Expr, ST> QueryId for VectorBytes<Expr, ST> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<Left, Right> QueryId for VectorDotProductF32<Left, Right> {
     type QueryId = ();
     const HAS_STATIC_QUERY_ID: bool = false;
 }
@@ -232,6 +291,22 @@ where
         out.push_sql(self.element_type);
         out.push_sql(")");
         out.push_sql("')");
+        Ok(())
+    }
+}
+
+impl<Left, Right, DB> QueryFragment<DB> for VectorDotProductF32<Left, Right>
+where
+    DB: Backend,
+    Left: QueryFragment<DB>,
+    Right: QueryFragment<DB>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, DB>) -> QueryResult<()> {
+        out.push_sql("toFloat32(arraySum(arrayMap((x, y) -> x * y, ");
+        self.left.walk_ast(out.reborrow())?;
+        out.push_sql(", ");
+        self.right.walk_ast(out.reborrow())?;
+        out.push_sql(")))");
         Ok(())
     }
 }

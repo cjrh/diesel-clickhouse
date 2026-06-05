@@ -18,6 +18,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 - `array_exists2(lambda2(...), left, right)` for ClickHouse `arrayExists` predicates over two parallel arrays while keeping both arrays as Diesel expressions/binds.
 - Richer `to_sql_with_metadata` output: positional bind ClickHouse types plus named HTTP parameter type/occurrence summaries.
 - Cookbook/usage bootstrap recipe for creating a database with the direct `clickhouse` client before constructing a database-scoped `AsyncClickHouseConnection`.
+- `vector_dot_product_f32(left, right)` for Diesel-owned `Array(Float32)` vector scoring without hand-assembling `arrayMap`/`arraySum` SQL.
 
 ### Fixed
 - Added placeholder-mismatch tests for `AsyncClickHouseConnection` bind parameterization, covering both extra rendered placeholders and unused collected binds.

@@ -116,7 +116,7 @@ Legend:
 | ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
 | ✅ 🧪 | Strings | `lower` `upper` `substring` `left_utf8` `length_utf8` `position` `position_case_insensitive` `replace_all` `concat` `null_if` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain` `domain_without_www` `top_level_domain` `url_path` `base64_encode` `hex` `city_hash64` `to_ipv4` `is_ipv6_string` | More specialized variants can be added by demand. |
-| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
+| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` `vector_dot_product_f32(embedding, bind::<Array<Float>, _>(query))` | Exact vector search via `ORDER BY distance ASC LIMIT n`; Diesel-owned vector scoring binds via `vector_dot_product_f32`; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int*` `to_uint*` `to_float*` `to_*_or_null` `to_*_or_zero` `to_string` `cast::<ST, _>(...)` `accurate_cast*` `is_null` `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
 
 ## Vector search

@@ -35,9 +35,10 @@ use diesel_clickhouse::{
     to_start_of_hour, to_string, to_uint32, to_uint64, to_uint64_or_null, to_uint64_or_zero,
     to_uint128, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_merge,
     uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full,
-    url_protocol, url_query_string, var_pop, var_pop_stable, var_samp, var_samp_stable, vector_f32,
-    vector_f32_binary, vector_f32_hex, vector_f32_le_hex, vector_f64, vector_f64_hex,
-    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
+    url_protocol, url_query_string, var_pop, var_pop_stable, var_samp, var_samp_stable,
+    vector_dot_product_f32, vector_f32, vector_f32_binary, vector_f32_hex, vector_f32_le_hex,
+    vector_f64, vector_f64_hex, vector_similarity_index, versioned_collapsing_merge_tree,
+    with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -724,6 +725,10 @@ fn renders_vector_search_helpers_and_index_ddl() {
         .order(cosine_distance(embedding, reference).asc())
         .limit(10);
     let literal_query = diesel::select(l2_distance(vector_f64([1.0, 2.0]), vector_f64([2.0, 4.0])));
+    let dot_product_query = image_vectors.select(vector_dot_product_f32(
+        embedding,
+        vector_f32([1.0, 0.0, 0.0]),
+    ));
     let binary_query = image_vectors.select((
         l2_distance(
             embedding,
@@ -758,6 +763,10 @@ fn renders_vector_search_helpers_and_index_ddl() {
     assert_eq!(
         to_sql(&literal_query).unwrap(),
         "SELECT L2Distance([1, 2], [2, 4])"
+    );
+    assert_eq!(
+        to_sql(&dot_product_query).unwrap(),
+        "SELECT toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, [1, 0, 0]))) FROM `image_vectors`"
     );
     assert_eq!(
         to_sql(&binary_query).unwrap(),

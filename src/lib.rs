@@ -187,9 +187,9 @@ pub use operators::{
 pub use ordering::{AliasRef, FillBound, NoFillBound, WithFill, alias_ref, with_fill};
 pub use predicate::{When, when};
 pub use vectors::{
-    VectorBytes, VectorBytesEncoding, VectorLiteral, vector_f32, vector_f32_binary, vector_f32_hex,
-    vector_f32_le_bytes, vector_f32_le_hex, vector_f64, vector_f64_binary, vector_f64_hex,
-    vector_f64_le_bytes, vector_f64_le_hex,
+    VectorBytes, VectorBytesEncoding, VectorDotProductF32, VectorLiteral, vector_dot_product_f32,
+    vector_f32, vector_f32_binary, vector_f32_hex, vector_f32_le_bytes, vector_f32_le_hex,
+    vector_f64, vector_f64_binary, vector_f64_hex, vector_f64_le_bytes, vector_f64_le_hex,
 };
 pub use window::{
     NoWindowBindings, NoWindowFrame, NoWindowOrder, NoWindowPartition, Over, OverDsl, OverWindow,

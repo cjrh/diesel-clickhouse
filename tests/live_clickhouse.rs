@@ -48,7 +48,7 @@ use diesel_clickhouse::{
     to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null,
     top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper,
     url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
-    vector_f32, with_fill, xx_hash64,
+    vector_dot_product_f32, vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -858,13 +858,13 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .filter(gold_documents::tenant_id.eq("acme"))
             .select((
                 gold_documents::id,
-                diesel::dsl::sql::<diesel::sql_types::Float>(
-                    "toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ",
-                )
-                .bind::<Float32Array, _>(diesel_clickhouse::bind::<Float32Array, _>(vec![
-                    1.0_f32, 0.0_f32,
-                ]))
-                .sql("))) AS score"),
+                expr_as(
+                    vector_dot_product_f32(
+                        gold_documents::embedding,
+                        diesel_clickhouse::bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]),
+                    ),
+                    "score",
+                ),
             ))
             .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(gold_documents::id.asc())

@@ -24,7 +24,7 @@ use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
     ClickHouseConnectionOptions, ClickHouseJoinDsl, DataType, TableEngine, alias_ref,
     array_exists2, bind, clickhouse, count, count_if, create_table, expr_as, final_table, has,
-    lambda2, source_column, to_sql, to_sql_with_metadata, when,
+    lambda2, source_column, to_sql, to_sql_with_metadata, vector_dot_product_f32, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -579,8 +579,8 @@ async fn main() -> Result<()> {
     doc.recipe(
         "Vector scoring through async execution",
         "A query embedding is just an `Array(Float32)` bind. Diesel owns the \
-         vector bytes, while the raw SQL fragment remains limited to the \
-         ClickHouse-specific `arrayMap`/`arraySum` expression.",
+         vector bytes, and `vector_dot_product_f32` hides the \
+         ClickHouse-specific `arrayMap`/`arraySum` scoring expression.",
     );
     doc.sql(R_VECTOR_SQL);
     doc.diesel(R_VECTOR_RUST);
@@ -590,11 +590,10 @@ async fn main() -> Result<()> {
         .filter(documents::tenant_id.eq("acme"))
         .select((
             documents::id,
-            diesel::dsl::sql::<diesel::sql_types::Float>(
-                "toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ",
-            )
-            .bind::<Float32Array, _>(bind::<Float32Array, _>(query_vector))
-            .sql("))) AS score"),
+            expr_as(
+                vector_dot_product_f32(documents::embedding, bind::<Float32Array, _>(query_vector)),
+                "score",
+            ),
         ))
         .order(alias_ref::<diesel::sql_types::Float>("score").desc())
         .then_order_by(documents::id.asc())
@@ -606,11 +605,13 @@ async fn main() -> Result<()> {
             .filter(documents::tenant_id.eq("acme"))
             .select((
                 documents::id,
-                diesel::dsl::sql::<diesel::sql_types::Float>(
-                    "toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ",
-                )
-                .bind::<Float32Array, _>(bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]))
-                .sql("))) AS score"),
+                expr_as(
+                    vector_dot_product_f32(
+                        documents::embedding,
+                        bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]),
+                    ),
+                    "score",
+                ),
             ))
             .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(documents::id.asc()),
@@ -1220,9 +1221,8 @@ const R_VECTOR_SQL: &str = "SELECT id, \
 toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, [1.0, 0.0]))) AS score \
 FROM cookbook_documents WHERE tenant_id = 'acme' ORDER BY score DESC, id ASC";
 
-const R_VECTOR_RUST: &str = r#"use diesel::dsl::sql;
-use diesel::sql_types::Float;
-use diesel_clickhouse::{alias_ref, bind};
+const R_VECTOR_RUST: &str = r#"use diesel::sql_types::Float;
+use diesel_clickhouse::{alias_ref, bind, expr_as, vector_dot_product_f32};
 use diesel_clickhouse::sql_types::Array;
 
 type Float32Array = Array<Float>;
@@ -1231,9 +1231,10 @@ let rows: Vec<(u64, f32)> = documents::table
     .filter(documents::tenant_id.eq("acme"))
     .select((
         documents::id,
-        sql::<Float>("toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, ")
-            .bind::<Float32Array, _>(bind::<Float32Array, _>(query_vector))
-            .sql("))) AS score"),
+        expr_as(
+            vector_dot_product_f32(documents::embedding, bind::<Float32Array, _>(query_vector)),
+            "score",
+        ),
     ))
     .order(alias_ref::<Float>("score").desc())
     .then_order_by(documents::id.asc())
