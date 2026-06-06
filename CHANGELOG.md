@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-06
+
 ## [0.10.0] — 2026-06-05
 
 ### Added
@@ -130,6 +132,7 @@ Initial release.
 - NYC taxi tutorial and executable tutorial example.
 
 [Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.9.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.9.0
 [0.8.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.8.0
