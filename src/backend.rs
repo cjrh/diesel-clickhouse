@@ -30,6 +30,13 @@ pub struct ClickHouseTypeMetadata {
     /// Canonical ClickHouse type name for diagnostics and broad behavior groups.
     pub name: &'static str,
     parameter_type: Cow<'static, str>,
+    bind_kind: ClickHouseBindKind,
+}
+
+#[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
+enum ClickHouseBindKind {
+    Positional,
+    NamedParameter,
 }
 
 impl ClickHouseTypeMetadata {
@@ -37,6 +44,7 @@ impl ClickHouseTypeMetadata {
         Self {
             name,
             parameter_type: Cow::Borrowed(name),
+            bind_kind: ClickHouseBindKind::Positional,
         }
     }
 
@@ -49,7 +57,20 @@ impl ClickHouseTypeMetadata {
         Self {
             name,
             parameter_type: parameter_type.into(),
+            bind_kind: ClickHouseBindKind::Positional,
         }
+    }
+
+    /// Mark this metadata as a named ClickHouse HTTP parameter binding.
+    pub(crate) fn into_named_parameter(mut self) -> Self {
+        self.bind_kind = ClickHouseBindKind::NamedParameter;
+        self
+    }
+
+    /// True when the bind bytes carry a named HTTP parameter value rather than
+    /// a positional SQL placeholder value.
+    pub(crate) fn is_named_parameter(&self) -> bool {
+        self.bind_kind == ClickHouseBindKind::NamedParameter
     }
 
     /// ClickHouse type string used for HTTP server-side parameters.
@@ -185,14 +206,29 @@ impl QueryFragment<ClickHouse> for BoxedLimitOffsetClause<'_, ClickHouse> {
     }
 }
 
+/// Metadata for one ClickHouse HTTP parameter shape found in rendered SQL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NamedParameterMetadata {
+    /// Parameter name from `{name:Type}`.
+    pub name: String,
+    /// ClickHouse type text from `{name:Type}`.
+    pub type_name: String,
+    /// Number of times this exact `{name:Type}` pair appears in the SQL.
+    pub occurrences: usize,
+}
+
 /// Metadata extracted from rendered ClickHouse SQL.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RenderedSqlMetadata {
     /// Number of positional `?` placeholders outside quoted strings/comments.
     pub positional_bind_count: usize,
+    /// ClickHouse type for each Diesel-collected positional bind, in bind order.
+    pub positional_bind_types: Vec<String>,
     /// ClickHouse HTTP parameter names such as `tenant_id` from
     /// `{tenant_id:String}`, in first-seen order.
     pub named_parameters: Vec<String>,
+    /// Named HTTP parameter details by first-seen `{name:Type}` pair.
+    pub named_parameter_details: Vec<NamedParameterMetadata>,
 }
 
 /// Rendered SQL plus lightweight bind metadata.
@@ -210,9 +246,19 @@ impl RenderedSql {
         self.metadata.positional_bind_count
     }
 
+    /// ClickHouse type for each Diesel-collected positional bind, in bind order.
+    pub fn positional_bind_types(&self) -> &[String] {
+        &self.metadata.positional_bind_types
+    }
+
     /// ClickHouse HTTP parameter names in first-seen order.
     pub fn named_parameters(&self) -> &[String] {
         &self.metadata.named_parameters
+    }
+
+    /// ClickHouse HTTP parameter details by first-seen `{name:Type}` pair.
+    pub fn named_parameter_details(&self) -> &[NamedParameterMetadata] {
+        &self.metadata.named_parameter_details
     }
 }
 
@@ -237,19 +283,37 @@ where
 /// This helper is intentionally transport-agnostic: it does not own the bind
 /// values, but it lets callers using [`to_sql`] with `clickhouse::Client` assert
 /// that their later `.bind(...)` and `.param(...)` calls match the rendered SQL.
+/// It reports positional bind types collected from Diesel plus ClickHouse
+/// `{name:Type}` HTTP parameter names, types, and occurrence counts scanned
+/// from the rendered SQL text.
 pub fn to_sql_with_metadata<T>(query: &T) -> QueryResult<RenderedSql>
 where
     T: QueryFragment<ClickHouse>,
 {
     let sql = to_sql(query)?;
-    let metadata = analyze_rendered_sql(&sql);
+    let mut metadata = analyze_rendered_sql(&sql);
+
+    let backend = ClickHouse;
+    let mut metadata_lookup = ();
+    let mut bind_collector = RawBytesBindCollector::<ClickHouse>::new();
+    query.collect_binds(&mut bind_collector, &mut metadata_lookup, &backend)?;
+    metadata.positional_bind_types = bind_collector
+        .metadata
+        .iter()
+        .filter(|metadata| !metadata.is_named_parameter())
+        .map(|metadata| metadata.parameter_type().to_owned())
+        .collect();
+
     Ok(RenderedSql { sql, metadata })
 }
 
 /// Extract positional and ClickHouse named parameter metadata from SQL.
 ///
-/// The scanner ignores placeholders inside single-quoted strings, double-quoted
-/// identifiers/strings, backtick identifiers, line comments, and block comments.
+/// This scanner sees only SQL text, so [`RenderedSqlMetadata::positional_bind_types`]
+/// is empty in its return value. Use [`to_sql_with_metadata`] when Diesel bind
+/// type metadata is needed. The scanner ignores placeholders inside
+/// single-quoted strings, double-quoted identifiers/strings, backtick
+/// identifiers, line comments, and block comments.
 pub fn analyze_rendered_sql(sql: &str) -> RenderedSqlMetadata {
     #[derive(Clone, Copy)]
     enum State {
@@ -264,6 +328,7 @@ pub fn analyze_rendered_sql(sql: &str) -> RenderedSqlMetadata {
     let mut state = State::Normal;
     let mut positional_bind_count = 0;
     let mut named_parameters = Vec::new();
+    let mut named_parameter_details: Vec<NamedParameterMetadata> = Vec::new();
     let chars: Vec<char> = sql.chars().collect();
     let mut idx = 0;
 
@@ -285,9 +350,22 @@ pub fn analyze_rendered_sql(sql: &str) -> RenderedSqlMetadata {
                     idx += 1;
                 }
                 ('{', _) => {
-                    if let Some((name, end_idx)) = parse_named_parameter(&chars, idx) {
+                    if let Some((name, type_name, end_idx)) = parse_named_parameter(&chars, idx) {
                         if !named_parameters.iter().any(|seen| seen == &name) {
-                            named_parameters.push(name);
+                            named_parameters.push(name.clone());
+                        }
+                        if let Some(existing) =
+                            named_parameter_details.iter_mut().find(|parameter| {
+                                parameter.name == name && parameter.type_name == type_name
+                            })
+                        {
+                            existing.occurrences += 1;
+                        } else {
+                            named_parameter_details.push(NamedParameterMetadata {
+                                name,
+                                type_name,
+                                occurrences: 1,
+                            });
                         }
                         idx = end_idx;
                     }
@@ -328,11 +406,13 @@ pub fn analyze_rendered_sql(sql: &str) -> RenderedSqlMetadata {
 
     RenderedSqlMetadata {
         positional_bind_count,
+        positional_bind_types: Vec::new(),
         named_parameters,
+        named_parameter_details,
     }
 }
 
-fn parse_named_parameter(chars: &[char], start: usize) -> Option<(String, usize)> {
+fn parse_named_parameter(chars: &[char], start: usize) -> Option<(String, String, usize)> {
     let mut idx = start + 1;
     let first = *chars.get(idx)?;
     if !(first == '_' || first.is_ascii_alphabetic()) {
@@ -358,9 +438,21 @@ fn parse_named_parameter(chars: &[char], start: usize) -> Option<(String, usize)
     }
 
     idx += 1;
+    let type_start = idx;
     while let Some(ch) = chars.get(idx).copied() {
         if ch == '}' {
-            return Some((name, idx));
+            if idx == type_start {
+                return None;
+            }
+            let type_name = chars[type_start..idx]
+                .iter()
+                .collect::<String>()
+                .trim()
+                .to_owned();
+            if type_name.is_empty() {
+                return None;
+            }
+            return Some((name, type_name, idx));
         }
         if ch == '\n' || ch == '\r' || ch == '\'' || ch == '"' || ch == '`' || ch == '{' {
             return None;

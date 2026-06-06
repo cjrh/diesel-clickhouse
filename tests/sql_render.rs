@@ -1,16 +1,17 @@
 use diesel::prelude::*;
 use diesel_clickhouse::{
     ClickHouseJoinDsl, ClickHouseQueryDsl, ClickHouseTextExpressionMethods, Column, DataType,
-    Format, NestedField, OutfileCompression, OverDsl, Setting, TableEngine, TableIndex,
-    VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
-    accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree,
+    Format, NamedParameterMetadata, NestedField, OutfileCompression, OverDsl, Setting, TableEngine,
+    TableIndex, VectorDistanceFunction, VectorQuantization, WindowFrameBound, abs, accurate_cast,
+    accurate_cast_or_default, accurate_cast_or_null, aggregate, aggregating_merge_tree, alias_ref,
     alias_source, alter_table, analysis_of_variance, analyze_rendered_sql, approx_top_sum,
-    approx_top_sum_with_reserved, array_all, array_count, array_exists, array_filter, array_map,
-    avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode, buffer, cast, ceil,
-    city_hash64, collapsing_merge_tree, concat, corr, cosine_distance, count, count_if,
-    count_merge, count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp,
-    covar_samp_stable, create_materialized_view, create_table, cube, cut_query_string, date_diff,
-    dense_rank, distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
+    approx_top_sum_with_reserved, array_all, array_count, array_exists, array_exists2,
+    array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode,
+    buffer, cast, ceil, ch_param, city_hash64, collapsing_merge_tree, concat, corr,
+    cosine_distance, cosine_similarity_f32_with_query_norm, count, count_if, count_merge,
+    count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank,
+    distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
     finalize_aggregation, first_significant_subdomain, floor, greatest, group_array_merge,
     group_array_state, group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike,
     ilike_escape, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
@@ -18,12 +19,13 @@ use diesel_clickhouse::{
     json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
     json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
     json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
-    length, like, like_escape, linf_distance, linf_norm, lower, mann_whitney_u_test, map_apply,
-    map_contains, map_filter, map_from_arrays, map_keys, map_values, max_merge, max_state,
-    min_merge, min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any,
-    multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any, multi_match_any_index,
-    mutation_assignment, not_ilike, not_ilike_escape, not_like, not_like_escape, partition_by,
-    partition_expr, partition_id, position, prewhere, projection, quantile, quantile_deterministic,
+    left_utf8, length, length_utf8, like, like_escape, linf_distance, linf_norm, lower,
+    mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
+    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
+    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
+    multi_match_any_index, mutation_assignment, named_param, not_ilike, not_ilike_escape, not_like,
+    not_like_escape, null_if, partition_by, partition_expr, partition_id, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
     quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample, sample_offset,
     simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64,
@@ -34,9 +36,10 @@ use diesel_clickhouse::{
     to_start_of_hour, to_string, to_uint32, to_uint64, to_uint64_or_null, to_uint64_or_zero,
     to_uint128, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_merge,
     uniq_exact_state, uniq_merge, uniq_state, upper, url_fragment, url_path, url_path_full,
-    url_protocol, url_query_string, var_pop, var_pop_stable, var_samp, var_samp_stable, vector_f32,
-    vector_f32_binary, vector_f32_hex, vector_f32_le_hex, vector_f64, vector_f64_hex,
-    vector_similarity_index, versioned_collapsing_merge_tree, with_fill, with_totals, xx_hash64,
+    url_protocol, url_query_string, var_pop, var_pop_stable, var_samp, var_samp_stable,
+    vector_dot_product_f32, vector_f32, vector_f32_binary, vector_f32_hex, vector_f32_le_hex,
+    vector_f64, vector_f64_hex, vector_similarity_index, versioned_collapsing_merge_tree,
+    with_fill, with_totals, xx_hash64,
 };
 
 diesel::table! {
@@ -252,8 +255,69 @@ fn renders_array_join_clause() {
 }
 
 #[test]
+fn renders_named_http_parameters() {
+    use self::image_vectors::dsl::*;
+
+    type Float32Array = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>;
+    let q = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0, 0.0]);
+    let query = image_vectors
+        .select((id, vector_dot_product_f32(embedding, q.clone())))
+        .filter(vector_dot_product_f32(embedding, q).gt(0.5_f32));
+    let rendered = to_sql_with_metadata(&query).unwrap();
+
+    assert_eq!(
+        rendered.sql,
+        "SELECT `image_vectors`.`id`, toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, {q:Array(Float32)}))) FROM `image_vectors` WHERE (toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, {q:Array(Float32)}))) > ?)"
+    );
+    assert_eq!(rendered.positional_bind_types(), &["Float32"]);
+    assert_eq!(rendered.named_parameters(), &["q"]);
+    assert_eq!(rendered.named_parameter_details()[0].occurrences, 2);
+}
+
+#[test]
+fn ch_param_alias_renders_named_http_parameter() {
+    let rendered = to_sql_with_metadata(&diesel::select(ch_param::<
+        diesel_clickhouse::sql_types::UInt64,
+        _,
+    >("user_id", 7_u64)))
+    .unwrap();
+
+    assert_eq!(rendered.sql, "SELECT {user_id:UInt64}");
+    assert!(rendered.positional_bind_types().is_empty());
+    assert_eq!(rendered.named_parameters(), &["user_id"]);
+}
+
+#[test]
+fn named_http_parameters_validate_names() {
+    type UInt64Array = diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::UInt64>;
+    let err = to_sql(&diesel::select(named_param::<UInt64Array, _>(
+        "bad-name",
+        vec![1_u64],
+    )))
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("invalid ClickHouse parameter name"),
+        "unexpected error: {err}"
+    );
+
+    let err = to_sql(&diesel::select(named_param::<UInt64Array, _>(
+        "__diesel_clickhouse_p0",
+        vec![1_u64],
+    )))
+    .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("reserved diesel-clickhouse prefix"),
+        "unexpected error: {err}"
+    );
+}
+
+#[test]
 fn rendered_sql_reports_bind_metadata() {
     use self::events::dsl::*;
+
+    type TextArray = diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>;
 
     let query = events
         .select((
@@ -261,14 +325,37 @@ fn rendered_sql_reports_bind_metadata() {
             diesel::dsl::sql::<diesel::sql_types::Text>("{bucket:String}"),
         ))
         .filter(tenant_id.eq("acme"))
+        .filter(array_exists(
+            lambda("tag", "tag = 'paid'"),
+            diesel_clickhouse::bind::<TextArray, _>(vec!["paid".to_owned()]),
+        ))
         .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "has({allowed:Array(String)}, tags) AND payload != '?'",
+            "(has({allowed:Array(String)}, tags) OR has({allowed:Array(String)}, tags)) AND payload != '?'",
         ))
         .limit(5);
     let rendered = to_sql_with_metadata(&query).unwrap();
 
-    assert_eq!(rendered.positional_bind_count(), 2);
+    assert_eq!(rendered.positional_bind_count(), 3);
+    assert_eq!(
+        rendered.positional_bind_types(),
+        &["String", "Array(String)", "Int64"]
+    );
     assert_eq!(rendered.named_parameters(), &["bucket", "allowed"]);
+    assert_eq!(
+        rendered.named_parameter_details(),
+        &[
+            NamedParameterMetadata {
+                name: "bucket".to_owned(),
+                type_name: "String".to_owned(),
+                occurrences: 1,
+            },
+            NamedParameterMetadata {
+                name: "allowed".to_owned(),
+                type_name: "Array(String)".to_owned(),
+                occurrences: 2,
+            },
+        ]
+    );
 }
 
 #[test]
@@ -280,7 +367,16 @@ fn scanner_ignores_placeholders_inside_quotes_and_comments() {
     let meta = analyze_rendered_sql(sql);
 
     assert_eq!(meta.positional_bind_count, 1);
+    assert!(meta.positional_bind_types.is_empty());
     assert_eq!(meta.named_parameters, vec!["real".to_string()]);
+    assert_eq!(
+        meta.named_parameter_details,
+        vec![NamedParameterMetadata {
+            name: "real".to_string(),
+            type_name: "Int".to_string(),
+            occurrences: 1,
+        }]
+    );
 }
 
 #[test]
@@ -291,16 +387,38 @@ fn scanner_handles_doubled_and_escaped_quotes() {
     let meta = analyze_rendered_sql("'it''s ? a \\' test' || 'x' || ?");
 
     assert_eq!(meta.positional_bind_count, 1);
+    assert!(meta.positional_bind_types.is_empty());
     assert!(meta.named_parameters.is_empty());
+    assert!(meta.named_parameter_details.is_empty());
 }
 
 #[test]
 fn scanner_dedupes_named_parameters_in_first_seen_order() {
-    let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int}");
+    let meta = analyze_rendered_sql("{b:Int} = {a:Int} AND {b:Int} = {a:Int} AND {b:String}");
 
     assert_eq!(
         meta.named_parameters,
         vec!["b".to_string(), "a".to_string()]
+    );
+    assert_eq!(
+        meta.named_parameter_details,
+        vec![
+            NamedParameterMetadata {
+                name: "b".to_string(),
+                type_name: "Int".to_string(),
+                occurrences: 2,
+            },
+            NamedParameterMetadata {
+                name: "a".to_string(),
+                type_name: "Int".to_string(),
+                occurrences: 2,
+            },
+            NamedParameterMetadata {
+                name: "b".to_string(),
+                type_name: "String".to_string(),
+                occurrences: 1,
+            },
+        ]
     );
 }
 
@@ -308,9 +426,10 @@ fn scanner_dedupes_named_parameters_in_first_seen_order() {
 fn scanner_rejects_malformed_named_parameters() {
     // `{` that is not a well-formed `{name:Type}` parameter (digit-led name,
     // missing colon, unterminated) must not be reported as a parameter.
-    let meta = analyze_rendered_sql("{1bad:Int} {nocolon} {open:Int");
+    let meta = analyze_rendered_sql("{1bad:Int} {nocolon} {open:Int {empty:}");
 
     assert!(meta.named_parameters.is_empty());
+    assert!(meta.named_parameter_details.is_empty());
 }
 
 #[test]
@@ -347,6 +466,24 @@ fn invalid_column_alias_is_rejected() {
 }
 
 #[test]
+fn renders_and_validates_alias_references() {
+    use self::events::dsl::*;
+
+    let query = events
+        .select(expr_as(latency_ms, "score"))
+        .order(alias_ref::<diesel::sql_types::Double>("score").desc());
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT `events`.`latency_ms` AS `score` FROM `events` ORDER BY `score` DESC"
+    );
+
+    let invalid = events
+        .select(expr_as(latency_ms, "score"))
+        .order(alias_ref::<diesel::sql_types::Double>("bad alias").desc());
+    assert!(to_sql(&invalid).is_err());
+}
+
+#[test]
 fn renders_string_numeric_and_conversion_functions() {
     use self::events::dsl::*;
 
@@ -354,9 +491,13 @@ fn renders_string_numeric_and_conversion_functions() {
         lower(tenant_id),
         upper(tenant_id),
         substring(tenant_id, 1_i64, 2_i64),
+        left_utf8(tenant_id, 2_i64),
+        length_utf8(tenant_id),
         position(tenant_id, "cm"),
+        position_case_insensitive(tenant_id, "AC"),
         replace_all(tenant_id, "ac", "AC"),
         concat(tenant_id, payload),
+        null_if(tenant_id, ""),
         regexp_match(tenant_id, "^ac"),
         to_uint64(latency_ms),
         to_int64(success),
@@ -374,7 +515,7 @@ fn renders_string_numeric_and_conversion_functions() {
 
     assert_eq!(
         to_sql(&string_query).unwrap(),
-        "SELECT lower(`events`.`tenant_id`), upper(`events`.`tenant_id`), substring(`events`.`tenant_id`, ?, ?), position(`events`.`tenant_id`, ?), replaceAll(`events`.`tenant_id`, ?, ?), concat(`events`.`tenant_id`, `events`.`payload`), match(`events`.`tenant_id`, ?), toUInt64(`events`.`latency_ms`), toInt64(`events`.`success`), toFloat64(`events`.`id`), toString(`events`.`id`) FROM `events`"
+        "SELECT lower(`events`.`tenant_id`), upper(`events`.`tenant_id`), substring(`events`.`tenant_id`, ?, ?), leftUTF8(`events`.`tenant_id`, ?), lengthUTF8(`events`.`tenant_id`), position(`events`.`tenant_id`, ?), positionCaseInsensitive(`events`.`tenant_id`, ?), replaceAll(`events`.`tenant_id`, ?, ?), concat(`events`.`tenant_id`, `events`.`payload`), nullIf(`events`.`tenant_id`, ?), match(`events`.`tenant_id`, ?), toUInt64(`events`.`latency_ms`), toInt64(`events`.`success`), toFloat64(`events`.`id`), toString(`events`.`id`) FROM `events`"
     );
     assert_eq!(
         to_sql(&numeric_query).unwrap(),
@@ -535,6 +676,7 @@ fn renders_higher_order_array_and_map_functions() {
         array_exists(lambda("tag", "tag = 'paid'"), tags),
         array_all(lambda("tag", "notEmpty(tag)"), tags),
         array_count(lambda("tag", "tag = 'paid'"), tags),
+        array_exists2(lambda2("tag", "key", "tag = key"), tags, map_keys(attrs)),
     ));
     let map_query = events.select((
         map_filter(lambda2("k", "v", "k = 'country'"), attrs),
@@ -544,11 +686,27 @@ fn renders_higher_order_array_and_map_functions() {
 
     assert_eq!(
         to_sql(&array_query).unwrap(),
-        "SELECT arrayMap(tag -> lower(tag), `events`.`tags`), arrayFilter(tag -> tag != '', `events`.`tags`), arrayExists(tag -> tag = 'paid', `events`.`tags`), arrayAll(tag -> notEmpty(tag), `events`.`tags`), arrayCount(tag -> tag = 'paid', `events`.`tags`) FROM `events`"
+        "SELECT arrayMap(tag -> lower(tag), `events`.`tags`), arrayFilter(tag -> tag != '', `events`.`tags`), arrayExists(tag -> tag = 'paid', `events`.`tags`), arrayAll(tag -> notEmpty(tag), `events`.`tags`), arrayCount(tag -> tag = 'paid', `events`.`tags`), arrayExists((tag, key) -> tag = key, `events`.`tags`, mapKeys(`events`.`attrs`)) FROM `events`"
     );
     assert_eq!(
         to_sql(&map_query).unwrap(),
         "SELECT mapFilter((k, v) -> k = 'country', `events`.`attrs`), mapApply((k, v) -> (k, upper(v)), `events`.`attrs`), mapFromArrays(mapKeys(`events`.`attrs`), mapValues(`events`.`attrs`)) FROM `events`"
+    );
+}
+
+#[test]
+fn array_exists2_requires_two_parameter_lambda() {
+    use self::events::dsl::*;
+
+    let query = events.select(array_exists2(
+        lambda("tag", "tag = 'paid'"),
+        tags,
+        map_keys(attrs),
+    ));
+    let err = to_sql(&query).unwrap_err();
+    assert!(
+        err.to_string().contains("two-parameter lambda"),
+        "unexpected error: {err}"
     );
 }
 
@@ -627,6 +785,27 @@ fn renders_vector_search_helpers_and_index_ddl() {
         .order(cosine_distance(embedding, reference).asc())
         .limit(10);
     let literal_query = diesel::select(l2_distance(vector_f64([1.0, 2.0]), vector_f64([2.0, 4.0])));
+    let dot_product_query = image_vectors.select(vector_dot_product_f32(
+        embedding,
+        vector_f32([1.0, 0.0, 0.0]),
+    ));
+    let cosine_similarity_query = image_vectors.select(cosine_similarity_f32_with_query_norm(
+        embedding,
+        vector_f32([1.0, 0.0, 0.0]),
+        1.0_f32,
+    ));
+    let raw_array_bind_query = image_vectors.select(
+        diesel::dsl::sql::<diesel::sql_types::Float>(
+            "arraySum(arrayMap((x, y) -> x * y, embedding, ",
+        )
+        .bind::<diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>, _>(
+            diesel_clickhouse::bind::<
+                diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>,
+                _,
+            >(vec![1.0_f32, 0.0_f32]),
+        )
+        .sql("))"),
+    );
     let binary_query = image_vectors.select((
         l2_distance(
             embedding,
@@ -661,6 +840,18 @@ fn renders_vector_search_helpers_and_index_ddl() {
     assert_eq!(
         to_sql(&literal_query).unwrap(),
         "SELECT L2Distance([1, 2], [2, 4])"
+    );
+    assert_eq!(
+        to_sql(&dot_product_query).unwrap(),
+        "SELECT toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, [1, 0, 0]))) FROM `image_vectors`"
+    );
+    assert_eq!(
+        to_sql(&cosine_similarity_query).unwrap(),
+        "SELECT toFloat32(if(? = 0 OR sqrt(arraySum(arrayMap(x -> x * x, `image_vectors`.`embedding`))) = 0, 0, toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, [1, 0, 0]))) / (sqrt(arraySum(arrayMap(x -> x * x, `image_vectors`.`embedding`))) * ?))) FROM `image_vectors`"
+    );
+    assert_eq!(
+        to_sql(&raw_array_bind_query).unwrap(),
+        "SELECT arraySum(arrayMap((x, y) -> x * y, embedding, ?)) FROM `image_vectors`"
     );
     assert_eq!(
         to_sql(&binary_query).unwrap(),

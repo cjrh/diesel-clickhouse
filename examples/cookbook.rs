@@ -1,11 +1,11 @@
 //! Executable cookbook for `diesel-clickhouse`.
 //!
 //! Each "recipe" shows a piece of ClickHouse SQL next to the Diesel query that
-//! produces it. The example then runs **both**: the raw SQL through the official
-//! `clickhouse` client and the Diesel query through `AsyncClickHouseConnection`,
-//! and asserts the two return identical rows. Generating `docs/COOKBOOK.md` is
-//! therefore a live verification that every recipe's ORM form really is
-//! equivalent to its hand-written SQL — a wrong recipe fails the build.
+//! produces it. For result-returning recipes, the example runs **both**: the raw
+//! SQL through the official `clickhouse` client and the Diesel query through
+//! `AsyncClickHouseConnection`, then asserts the two return identical rows.
+//! Render-only recipes are marked as such. Generating `docs/COOKBOOK.md` is
+//! therefore a live verification of each executable recipe's ORM form.
 //!
 //! ```text
 //! CLICKHOUSE_URL=http://default:password@localhost:8123/default \
@@ -22,8 +22,10 @@ use diesel::prelude::*;
 // async connection's `.load`/`.first` resolve unambiguously.
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
-    ClickHouseConnectionOptions, ClickHouseJoinDsl, bind, clickhouse, count, count_if, expr_as,
-    final_table, has, source_column, to_sql, to_sql_with_metadata, when,
+    ClickHouseConnectionOptions, ClickHouseJoinDsl, DataType, TableEngine, alias_ref,
+    array_exists2, bind, clickhouse, cosine_similarity_f32_with_query_norm, count, count_if,
+    create_table, expr_as, final_table, has, if_, lambda2, named_param, position_case_insensitive,
+    source_column, to_float32, to_sql, to_sql_with_metadata, vector_dot_product_f32, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -65,6 +67,21 @@ diesel::table! {
     }
 }
 
+diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    #[sql_name = "cookbook_documents"]
+    documents (id) {
+        id -> UInt64,
+        tenant_id -> Text,
+        text -> Text,
+        source_type -> Text,
+        processed_at -> DateTime64,
+        embedding -> Array<Float>,
+    }
+}
+
 diesel::allow_tables_to_appear_in_same_query!(events, tenants);
 
 // A row for the batch-insert recipe.
@@ -98,6 +115,63 @@ async fn main() -> Result<()> {
     let mut doc = CookbookDoc::new();
     intro(&mut doc);
 
+    // ----- Recipe: database bootstrap ---------------------------------------
+    doc.recipe(
+        "Bootstrap a database, then use `AsyncClickHouseConnection`",
+        "Create the database with the underlying `clickhouse` client before you \
+         build a database-scoped async Diesel connection. This keeps admin DDL \
+         explicit, then moves ordinary reads/writes back to \
+         `AsyncClickHouseConnection` once the database exists.",
+    );
+    doc.diesel(R_BOOTSTRAP_RUST);
+    let bootstrap_database = "cookbook_bootstrap";
+    let bootstrap_table = "events";
+    client
+        .query("DROP DATABASE IF EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
+    client
+        .query("CREATE DATABASE IF NOT EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
+    let bootstrap_ddl = create_table(format!("{bootstrap_database}.{bootstrap_table}"))
+        .if_not_exists()
+        .column("id", DataType::UInt64)
+        .engine(TableEngine::memory());
+    let bootstrap_ddl_sql = to_sql(&bootstrap_ddl)?;
+    client.query(&bootstrap_ddl_sql).execute().await?;
+
+    let mut bootstrap_url = url::Url::parse(&database_url)?;
+    bootstrap_url.set_path(bootstrap_database);
+    let mut bootstrap_conn = ClickHouseConnectionOptions::from_url(bootstrap_url.as_str())?
+        .connect()
+        .await?;
+    bootstrap_conn
+        .batch_execute("INSERT INTO events VALUES (1)")
+        .await?;
+    #[derive(QueryableByName)]
+    struct BootstrapCount {
+        #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+        count: u64,
+    }
+    let count_row: BootstrapCount = diesel::sql_query("SELECT count() AS count FROM events")
+        .get_result(&mut bootstrap_conn)
+        .await?;
+    assert_eq!(count_row.count, 1);
+    doc.rendered(&bootstrap_ddl_sql);
+    doc.text_output(&format!(
+        "bootstrapped database {bootstrap_database:?}; async connection read count: {}",
+        count_row.count
+    ));
+    drop(bootstrap_conn);
+    client
+        .query("DROP DATABASE IF EXISTS ?")
+        .bind(clickhouse::sql::Identifier(bootstrap_database))
+        .execute()
+        .await?;
+
     // ----- Recipe: typed filters --------------------------------------------
     doc.recipe(
         "Type-safe filters instead of `sql::<Bool>`",
@@ -124,6 +198,40 @@ async fn main() -> Result<()> {
             .select((events::id, events::tenant_id))
             .order(events::id.asc()),
     )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: migrate external binds to async connection ---------------
+    doc.recipe(
+        "Migrating from `to_sql` + external binds to `AsyncClickHouseConnection`",
+        "Rendering with `to_sql` gives you a SQL string, but the bind values stay \
+         in Diesel's AST. If you execute that string through another client, a \
+         human must re-supply every value in render order. Executing the same \
+         AST through `AsyncClickHouseConnection` removes that manual ordering \
+         step: Diesel collects the tenant and limit binds and the connection \
+         sends them with the query.",
+    );
+    doc.diesel(R_MIGRATE_RUST);
+    let migration_query = events::table
+        .filter(events::tenant_id.eq("acme"))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .limit(2_i64);
+    let rendered = to_sql_with_metadata(&migration_query)?;
+    assert_eq!(rendered.positional_bind_count(), 2);
+    let raw: Vec<(u64, String)> = client
+        .query(&rendered.sql)
+        .bind("acme")
+        .bind(2_i64)
+        .fetch_all()
+        .await?;
+    let orm: Vec<(u64, String)> = events::table
+        .filter(events::tenant_id.eq("acme"))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .limit(2_i64)
+        .load(&mut conn)
+        .await?;
+    doc.rendered(&rendered.sql);
     doc.shared_output(&parity(&orm, &raw));
 
     // ----- Recipe: bind() against an unsigned column ------------------------
@@ -210,41 +318,123 @@ async fn main() -> Result<()> {
         "Stable SQL text with ClickHouse named parameters",
         "When the SQL string must stay byte-for-byte identical across calls — so \
          ClickHouse's query cache hits, or a parameterized view sees one query — \
-         use a ClickHouse named parameter (`{name:Type}`). It can be referenced \
-         many times in the text but is bound once with the client's `.param(...)`, \
-         which makes it a tidy fit for the optional-filter sentinel: an empty value \
-         leaves `'' = ''` true and disables the filter, a non-empty value enforces \
-         it, and the SQL text never changes. The `{name:Type}` string is raw, so \
-         its contents are unchecked; `to_sql_with_metadata(...).named_parameters()` \
-         reports the names so a test can assert your `.param(...)` calls line up.",
+         use `named_param::<ST, _>(\"name\", value)`. It renders ClickHouse's \
+         `{name:Type}` syntax, can be referenced many times in the query, and is \
+         still bound through `AsyncClickHouseConnection` rather than through an \
+         external `.param(...)` call. This makes it a tidy fit for the \
+         optional-filter sentinel: an empty value leaves `'' = ''` true and \
+         disables the filter, a non-empty value enforces it, and the SQL text \
+         stays stable.",
     );
     doc.sql(R_NAMED_SQL);
     doc.diesel(R_NAMED_RUST);
+    let tenant_param = named_param::<diesel::sql_types::Text, _>("tenant", "acme");
     let named_query = events::table
         .select((events::id, events::tenant_id))
-        .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
-            "({tenant:String} = '' OR tenant_id = {tenant:String})",
-        ))
+        .filter(
+            tenant_param
+                .clone()
+                .eq(diesel::dsl::sql::<diesel::sql_types::Text>("''"))
+                .or(events::tenant_id.eq(tenant_param)),
+        )
         .order(events::id.asc());
     let rendered = to_sql_with_metadata(&named_query)?;
     assert_eq!(rendered.named_parameters(), &["tenant"]);
     doc.rendered(&rendered.sql);
-    // One stable SQL string, bound by name. An empty value disables the filter.
-    let enabled: Vec<(u64, String)> = client
-        .query(&rendered.sql)
-        .param("tenant", "acme")
-        .fetch_all()
-        .await?;
-    let disabled: Vec<(u64, String)> = client
-        .query(&rendered.sql)
-        .param("tenant", "")
-        .fetch_all()
+    // One stable SQL string, bound by name through the async connection. An
+    // empty value disables the filter.
+    let enabled: Vec<(u64, String)> = named_query.load(&mut conn).await?;
+    let disabled_param = named_param::<diesel::sql_types::Text, _>("tenant", "");
+    let disabled: Vec<(u64, String)> = events::table
+        .select((events::id, events::tenant_id))
+        .filter(
+            disabled_param
+                .clone()
+                .eq(diesel::dsl::sql::<diesel::sql_types::Text>("''"))
+                .or(events::tenant_id.eq(disabled_param)),
+        )
+        .order(events::id.asc())
+        .load(&mut conn)
         .await?;
     doc.text_output(&format!(
         "named parameters: {:?}\n\ntenant = \"acme\" -> {enabled:#?}\n\ntenant = \"\" matches all {} rows",
         rendered.named_parameters(),
         disabled.len(),
     ));
+
+    // ----- Recipe: repeated named parameter for search ----------------------
+    doc.recipe(
+        "Text search with a repeated named parameter",
+        "When the same value appears more than once, make it a reusable \
+         `named_param` and pass clones into typed helpers. The search text below \
+         appears in both the score projection and the filter, but the async \
+         connection sends one ClickHouse `param_needle` setting. A tiny raw \
+         fragment remains only to demonstrate that literal question marks inside \
+         strings/comments are not treated as bind placeholders.",
+    );
+    doc.sql(R_RAW_BIND_SQL);
+    doc.diesel(R_RAW_BIND_RUST);
+    let needle = named_param::<diesel::sql_types::Text, _>("needle", "rust");
+    let score_expr = expr_as(
+        to_float32(if_(
+            position_case_insensitive(documents::text, needle.clone())
+                .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64)),
+            bind::<diesel::sql_types::Float, _>(1.0_f32),
+            bind::<diesel::sql_types::Float, _>(0.0_f32),
+        )),
+        "score",
+    );
+    let match_filter = position_case_insensitive(documents::text, needle)
+        .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64))
+        .and(diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "text != '?' /* ? in comment */",
+        ));
+    let orm: Vec<(u64, String, f32)> = documents::table
+        .filter(documents::tenant_id.eq("acme"))
+        .filter(match_filter)
+        .select((documents::id, documents::text, score_expr))
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+        .then_order_by(documents::processed_at.desc())
+        .then_order_by(documents::id.asc())
+        .limit(10_i64)
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, String, f32)> = client.query(R_RAW_BIND_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .filter(
+                position_case_insensitive(
+                    documents::text,
+                    named_param::<diesel::sql_types::Text, _>("needle", "rust"),
+                )
+                .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64))
+                .and(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "text != '?' /* ? in comment */",
+                )),
+            )
+            .select((
+                documents::id,
+                documents::text,
+                expr_as(
+                    to_float32(if_(
+                        position_case_insensitive(
+                            documents::text,
+                            named_param::<diesel::sql_types::Text, _>("needle", "rust"),
+                        )
+                        .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64)),
+                        bind::<diesel::sql_types::Float, _>(1.0_f32),
+                        bind::<diesel::sql_types::Float, _>(0.0_f32),
+                    )),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(documents::processed_at.desc())
+            .then_order_by(documents::id.asc())
+            .limit(10_i64),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
 
     // ----- Recipe: FINAL + typed projection ---------------------------------
     doc.recipe(
@@ -278,7 +468,10 @@ async fn main() -> Result<()> {
          (`ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`, `GLOBAL`). The `.on(...)` predicate \
          must be boolean and is written with real, type-checked columns; the \
          projection uses `source_column(...)` for the same reason as `FINAL` \
-         above.",
+         above. The schema prelude for this example includes \
+         `diesel::allow_tables_to_appear_in_same_query!(events, tenants)`; keep \
+         the same Diesel cross-table allowance next to your ClickHouse \
+         `table!` declarations.",
     );
     doc.sql(R_JOIN_SQL);
     doc.diesel(R_JOIN_RUST);
@@ -362,28 +555,244 @@ async fn main() -> Result<()> {
     )?);
     doc.shared_output(&parity(&orm, &raw));
 
+    // ----- Recipe: async array parameters -----------------------------------
+    doc.recipe(
+        "Array parameters through async execution",
+        "`AsyncClickHouseConnection` can carry Diesel-collected array values, so \
+         membership filters and higher-order array predicates do not need \
+         external `.param(...)` calls. Use `bind::<Array<T>, _>(vec)` for a typed \
+         array expression; `array_exists2(lambda2(...), left, right)` covers the \
+         common parallel-array predicate shape. The lambda body remains an explicit \
+         ClickHouse SQL fragment, so keep it short and local.",
+    );
+    doc.sql(R_ARRAY_PARAM_SQL);
+    doc.diesel(R_ARRAY_PARAM_RUST);
+    type EventIds = diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::UInt64>;
+    type TextArray = diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>;
+    let event_ids = vec![1_u64, 4_u64];
+    let orm: Vec<(u64, String)> = events::table
+        .filter(has(bind::<EventIds, _>(event_ids), events::id))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, String)> = client.query(R_ARRAY_PARAM_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &events::table
+            .filter(has(bind::<EventIds, _>(vec![1_u64, 4_u64]), events::id))
+            .select((events::id, events::tenant_id))
+            .order(events::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    let allowed_pair_rows: Vec<u64> = events::table
+        .filter(array_exists2(
+            lambda2(
+                "allowed_tenant",
+                "allowed_status",
+                "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+            ),
+            bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]),
+            bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]),
+        ))
+        .select(events::id)
+        .order(events::id.asc())
+        .load(&mut conn)
+        .await?;
+    assert_eq!(allowed_pair_rows, vec![1, 3, 6]);
+    doc.text_output(&format!(
+        "parallel arrayExists allowed ids: {allowed_pair_rows:#?}"
+    ));
+
+    // ----- Recipe: vector search -------------------------------------------
+    doc.recipe(
+        "Vector scoring through async execution",
+        "A query embedding can be a reusable ClickHouse named parameter. Diesel \
+         owns the vector bytes, `named_param` renders `{q:Array(Float32)}`, and \
+         `vector_dot_product_f32` hides the ClickHouse-specific \
+         `arrayMap`/`arraySum` scoring expression.",
+    );
+    doc.sql(R_VECTOR_SQL);
+    doc.diesel(R_VECTOR_RUST);
+    type Float32Array = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>;
+    let query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+    let orm: Vec<(u64, f32)> = documents::table
+        .filter(documents::tenant_id.eq("acme"))
+        .select((
+            documents::id,
+            expr_as(
+                vector_dot_product_f32(documents::embedding, query_vector),
+                "score",
+            ),
+        ))
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+        .then_order_by(documents::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, f32)> = client.query(R_VECTOR_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((
+                documents::id,
+                expr_as(
+                    vector_dot_product_f32(
+                        documents::embedding,
+                        named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]),
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(documents::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: cosine similarity ----------------------------------------
+    doc.recipe(
+        "Cosine similarity through async execution",
+        "`cosine_similarity_f32_with_query_norm` covers the common semantic-search \
+         score shape while keeping the query vector as a Diesel-owned \
+         `Array(Float32)` parameter. Compute the query norm once in Rust, pass it \
+         as a scalar bind, and use `alias_ref` for the computed score alias.",
+    );
+    doc.sql(R_COSINE_SQL);
+    doc.diesel(R_COSINE_RUST);
+    let query_norm = 1.0_f32;
+    let query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+    let orm: Vec<(u64, f32)> = documents::table
+        .filter(documents::tenant_id.eq("acme"))
+        .select((
+            documents::id,
+            expr_as(
+                cosine_similarity_f32_with_query_norm(
+                    documents::embedding,
+                    query_vector,
+                    query_norm,
+                ),
+                "score",
+            ),
+        ))
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+        .then_order_by(documents::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, f32)> = client.query(R_COSINE_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((
+                documents::id,
+                expr_as(
+                    cosine_similarity_f32_with_query_norm(
+                        documents::embedding,
+                        named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]),
+                        query_norm,
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(documents::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: named struct loading -------------------------------------
+    doc.recipe(
+        "Named struct result mapping",
+        "For typed projections, derive `Queryable` and keep the struct fields in \
+         select-list order. For raw SQL or heavily aliased rows, derive \
+         `QueryableByName` and annotate each field with the ClickHouse/Diesel SQL \
+         type. Existing `clickhouse::Row` read structs can use \
+         `load_clickhouse_rows(...)` as a migration bridge. All forms execute \
+         through `AsyncClickHouseConnection`, so bind values still stay \
+         Diesel-owned.",
+    );
+    doc.diesel(R_STRUCT_RUST);
+    #[derive(Debug, PartialEq, Queryable)]
+    struct TenantOverview {
+        tenant_id: String,
+        n: u64,
+        ok: i64,
+    }
+    #[derive(Debug, PartialEq, QueryableByName)]
+    struct DocumentHit {
+        #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+        id: u64,
+        #[diesel(sql_type = diesel::sql_types::Text)]
+        text: String,
+        #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+        source_type: Option<String>,
+        #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
+        embedding: Vec<f32>,
+    }
+    #[derive(Debug, PartialEq, clickhouse::Row, serde::Deserialize)]
+    struct DocumentHitRow {
+        id: u64,
+        text: String,
+    }
+    let overview: Vec<TenantOverview> = events::table
+        .group_by(events::tenant_id)
+        .select((
+            events::tenant_id,
+            expr_as(count(), "n"),
+            expr_as(count_if(events::success), "ok"),
+        ))
+        .order(events::tenant_id.asc())
+        .load(&mut conn)
+        .await?;
+    let hits: Vec<DocumentHit> = diesel::sql_query(
+        "SELECT id, text, nullIf(source_type, '') AS source_type, embedding \
+         FROM cookbook_documents WHERE tenant_id = ? ORDER BY id LIMIT 2",
+    )
+    .bind::<diesel::sql_types::Text, _>("acme")
+    .load(&mut conn)
+    .await?;
+    let row_bridge_hits: Vec<DocumentHitRow> = conn
+        .load_clickhouse_rows(
+            documents::table
+                .filter(documents::tenant_id.eq("acme"))
+                .select((documents::id, documents::text))
+                .order(documents::id.asc())
+                .limit(2_i64),
+        )
+        .await?;
+    assert_eq!(overview.len(), 2);
+    assert_eq!(hits.len(), 2);
+    assert_eq!(row_bridge_hits.len(), 2);
+    doc.text_output(&format!(
+        "typed aggregate rows: {overview:#?}\n\nraw/aliased document rows: {hits:#?}\n\nclickhouse::Row bridge rows: {row_bridge_hits:#?}"
+    ));
+
     // ----- Recipe: render-only path -----------------------------------------
     doc.recipe(
         "Render SQL for another client with `to_sql_with_metadata`",
         "When you execute through a ClickHouse client other than \
          `AsyncClickHouseConnection`, render the query and inspect its \
-         placeholders. `to_sql_with_metadata` reports the positional `?` count \
-         and any named HTTP parameters, so a test can assert your `.bind(...)` \
-         calls line up. Remember: `to_sql` renders only the SQL — the Diesel \
-         bind values stay behind, so you re-supply them in render order.",
+         placeholders. `to_sql_with_metadata` reports the positional `?` count, \
+         Diesel-collected positional bind types, and any named HTTP parameter \
+         names/types/occurrence counts, so a test can assert your `.bind(...)` \
+         and `.param(...)` calls line up. Remember: `to_sql` renders only the \
+         SQL — the Diesel bind values stay behind, so you re-supply them in \
+         render order.",
     );
     let rendered = to_sql_with_metadata(
         &events::table
             .filter(events::tenant_id.eq("acme"))
             .filter(events::success.eq(true))
+            .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                "has({allowed:Array(String)}, tags)",
+            ))
             .select(events::id),
     )?;
     doc.diesel(R_METADATA_RUST);
     doc.rendered(&rendered.sql);
     doc.text_output(&format!(
-        "positional `?` placeholders: {}\nnamed parameters: {:?}",
+        "positional `?` placeholders: {}\npositional bind types: {:?}\nnamed parameters: {:?}\nnamed parameter details: {:?}",
         rendered.positional_bind_count(),
+        rendered.positional_bind_types(),
         rendered.named_parameters(),
+        rendered.named_parameter_details(),
     ));
 
     // ----- Recipe: inserts --------------------------------------------------
@@ -422,10 +831,11 @@ async fn main() -> Result<()> {
         "When raw SQL is the right call — and what you give up",
         "Reach for `sql::<T>(...)` only when ClickHouse's grammar has no typed \
          binding — for example an `ASOF` join whose `ON` mixes equality and \
-         inequality across columns. The expression's result type (`<T>`) is still \
-         checked, but its **contents are not**: column names, operators, and \
-         table references inside the string are opaque to the compiler, so a typo \
-         surfaces only at runtime. Keep these strings small and local.",
+         inequality across columns. This recipe is render-only because the exact \
+         ASOF shape is schema/data dependent. The expression's result type (`<T>`) \
+         is still checked, but its **contents are not**: column names, operators, \
+         and table references inside the string are opaque to the compiler, so a \
+         typo surfaces only at runtime. Keep these strings small and local.",
     );
     doc.sql(R_RAW_SQL);
     doc.diesel(R_RAW_RUST);
@@ -471,10 +881,11 @@ fn intro(doc: &mut CookbookDoc) {
     doc.heading(1, "Cookbook");
     doc.paragraph(
         "Copy-paste recipes for common ClickHouse queries, each shown as raw SQL \
-         next to the equivalent Diesel query. Every recipe below was generated by \
-         running **both** forms against a live ClickHouse server and asserting \
-         they return identical rows — see `examples/cookbook.rs`. If a recipe's \
-         two forms ever diverge, the document fails to build.",
+         next to the equivalent Diesel query. Result-returning recipes are \
+         generated by running **both** forms against a live ClickHouse server and \
+         asserting they return identical rows; render-only recipes are marked as \
+         such — see `examples/cookbook.rs`. If an executable recipe's two forms \
+         ever diverge, the document fails to build.",
     );
     doc.paragraph(
         "For the model behind these recipes (execution modes, the safety \
@@ -514,8 +925,17 @@ fn intro(doc: &mut CookbookDoc) {
             ["t.unsigned_col > 42", "t::unsigned_col.gt(bind(42u64))"],
             ["optional WHERE col = v", "when(flag, t::col.eq(v))"],
             [
+                "ORDER BY score alias",
+                "alias_ref::<Float>(\"score\").desc()",
+            ],
+            ["Array(UInt64) bind", "bind::<Array<UInt64>, _>(vec![...])"],
+            [
+                "raw function with a bind",
+                "sql::<T>(\"fn(\").bind::<ST, _>(v).sql(\")\")",
+            ],
+            [
                 "{name:Type} (stable SQL text)",
-                "sql::<T>(\"{name:Type}\") + .param(..)",
+                "named_param::<Type, _>(\"name\", value)",
             ],
             ["bare t.col from a custom source", "source_column(t::col)"],
             ["FORMAT JSONEachRow", ".format(Format::JsonEachRow)"],
@@ -656,9 +1076,48 @@ CREATE TABLE cookbook_latest (id UInt64, status String, version UInt64)
     ENGINE = ReplacingMergeTree(version) ORDER BY id;
 INSERT INTO cookbook_latest VALUES (1, 'open', 1), (1, 'closed', 2), (2, 'open', 1);
 
+DROP TABLE IF EXISTS cookbook_documents;
+CREATE TABLE cookbook_documents (
+    id UInt64,
+    tenant_id String,
+    text String,
+    source_type String,
+    processed_at DateTime64(3),
+    embedding Array(Float32)
+) ENGINE = Memory;
+INSERT INTO cookbook_documents VALUES
+    (1, 'acme', 'Rust ? async guide', 'blog', '2024-01-01 00:00:00.000', [1.0, 0.0]),
+    (2, 'acme', 'ClickHouse diesel notes', '', '2024-01-01 00:05:00.000', [0.2, 0.8]),
+    (3, 'beta', 'Rust analytics', 'doc', '2024-01-01 00:10:00.000', [0.4, 0.6]),
+    (4, 'acme', 'rust diesel clickhouse', 'doc', '2024-01-01 00:15:00.000', [0.9, 0.1]);
+
 DROP TABLE IF EXISTS cookbook_ingest;
 CREATE TABLE cookbook_ingest (id UInt64, tenant_id String) ENGINE = Memory;
 "#;
+
+const R_BOOTSTRAP_RUST: &str = r#"use diesel_async::SimpleAsyncConnection;
+use diesel_clickhouse::{
+    clickhouse::{self, sql::Identifier}, create_table, ClickHouseConnectionOptions,
+    DataType, TableEngine, to_sql,
+};
+
+// Admin/bootstrap DDL uses the direct ClickHouse client without a database.
+let admin = clickhouse::Client::default().with_url("http://localhost:8123");
+admin.query("CREATE DATABASE IF NOT EXISTS ?")
+    .bind(Identifier("analytics"))
+    .execute().await?;
+
+let ddl = create_table("analytics.events")
+    .if_not_exists()
+    .column("id", DataType::UInt64)
+    .engine(TableEngine::memory());
+admin.query(&to_sql(&ddl)?).execute().await?;
+
+// Once the database exists, use the async Diesel connection for normal work.
+let mut conn = ClickHouseConnectionOptions::new("http://localhost:8123")
+    .database("analytics")
+    .connect().await?;
+conn.batch_execute("INSERT INTO events VALUES (1)").await?;"#;
 
 const R_FILTER_SQL: &str = "SELECT id, tenant_id FROM cookbook_events WHERE tenant_id = 'acme' AND success = true ORDER BY id";
 
@@ -668,6 +1127,36 @@ const R_FILTER_RUST: &str = r#"let rows: Vec<(u64, String)> = events::table
     .select((events::id, events::tenant_id))
     .order(events::id.asc())
     .load(&mut conn).await?;"#;
+
+const R_MIGRATE_RUST: &str = r#"use diesel_async::RunQueryDsl;
+use diesel_clickhouse::{to_sql_with_metadata, AsyncClickHouseConnection};
+
+let query = events::table
+    .filter(events::tenant_id.eq("acme"))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .limit(2_i64);
+
+// Render-only/external-client path: tests can count placeholders, but the
+// caller must still bind values in exactly the rendered order.
+let rendered = to_sql_with_metadata(&query)?;
+assert_eq!(rendered.positional_bind_count(), 2);
+let rows = client
+    .query(&rendered.sql)
+    .bind("acme")
+    .bind(2_i64)
+    .fetch_all::<(u64, String)>()
+    .await?;
+
+// Preferred read path: Diesel collects and sends both binds for you.
+let mut conn = AsyncClickHouseConnection::with_client(client.clone());
+let rows: Vec<(u64, String)> = events::table
+    .filter(events::tenant_id.eq("acme"))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .limit(2_i64)
+    .load(&mut conn)
+    .await?;"#;
 
 const R_BIND_SQL: &str =
     "SELECT id, tenant_id FROM cookbook_events WHERE id > 2 AND id <= 5 ORDER BY id";
@@ -700,23 +1189,58 @@ const R_NAMED_SQL: &str = "SELECT id, tenant_id FROM cookbook_events \
 WHERE ({tenant:String} = '' OR tenant_id = {tenant:String}) ORDER BY id";
 
 const R_NAMED_RUST: &str = r#"use diesel::dsl::sql;
-use diesel::sql_types::Bool;
-use diesel_clickhouse::to_sql_with_metadata;
+use diesel::sql_types::Text;
+use diesel_clickhouse::named_param;
 
-// `{tenant:String}` appears twice in the text but is bound once, so the SQL
-// string is identical for every tenant (and "" disables the filter).
-let query = events::table
+// `{tenant:String}` appears twice in the text but is bound once by the async
+// connection; "" disables the filter.
+let tenant = named_param::<Text, _>("tenant", "acme");
+let rows: Vec<(u64, String)> = events::table
     .select((events::id, events::tenant_id))
-    .filter(sql::<Bool>("({tenant:String} = '' OR tenant_id = {tenant:String})"))
-    .order(events::id.asc());
+    .filter(
+        tenant
+            .clone()
+            .eq(sql::<Text>("''"))
+            .or(events::tenant_id.eq(tenant)),
+    )
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
 
-let rendered = to_sql_with_metadata(&query)?;
-assert_eq!(rendered.named_parameters(), &["tenant"]);
+const R_RAW_BIND_SQL: &str = "SELECT id, text, \
+toFloat32(if(positionCaseInsensitive(text, 'rust') > 0, 1, 0)) AS score \
+FROM cookbook_documents \
+WHERE tenant_id = 'acme' AND positionCaseInsensitive(text, 'rust') > 0 \
+ORDER BY score DESC, processed_at DESC, id ASC LIMIT 10";
 
-let rows: Vec<(u64, String)> = client
-    .query(&rendered.sql)
-    .param("tenant", "acme") // bind once by name; "" matches all rows
-    .fetch_all().await?;"#;
+const R_RAW_BIND_RUST: &str = r#"use diesel::dsl::sql;
+use diesel::sql_types::{Bool, Float, Text};
+use diesel_clickhouse::{
+    alias_ref, bind, expr_as, if_, named_param, position_case_insensitive, to_float32,
+};
+use diesel_clickhouse::sql_types::UInt64;
+
+let needle = named_param::<Text, _>("needle", "rust");
+let score = expr_as(
+    to_float32(if_(
+        position_case_insensitive(documents::text, needle.clone()).gt(bind::<UInt64, _>(0_u64)),
+        bind::<Float, _>(1.0_f32),
+        bind::<Float, _>(0.0_f32),
+    )),
+    "score",
+);
+let matches = position_case_insensitive(documents::text, needle)
+    .gt(bind::<UInt64, _>(0_u64))
+    .and(sql::<Bool>("text != '?' /* ? in comment */"));
+
+let rows: Vec<(u64, String, f32)> = documents::table
+    .filter(documents::tenant_id.eq("acme"))
+    .filter(matches)
+    .select((documents::id, documents::text, score))
+    .order(alias_ref::<Float>("score").desc())
+    .then_order_by(documents::processed_at.desc())
+    .then_order_by(documents::id.asc())
+    .limit(10_i64)
+    .load(&mut conn).await?;"#;
 
 const R_FINAL_SQL: &str = "SELECT id, status FROM cookbook_latest FINAL ORDER BY id";
 
@@ -733,6 +1257,10 @@ ON cookbook_events.tenant_id = cookbook_tenants.tenant_id \
 ORDER BY cookbook_events.id";
 
 const R_JOIN_RUST: &str = r#"use diesel_clickhouse::{ClickHouseJoinDsl, source_column};
+
+// Put this next to the ClickHouse `table!` declarations for every table pair
+// that can appear together in one Diesel query.
+diesel::allow_tables_to_appear_in_same_query!(events, tenants);
 
 let rows: Vec<(u64, String)> = events::table
     .clickhouse_join(tenants::table)
@@ -769,17 +1297,160 @@ let rows: Vec<(u64, String)> = events::table
     .order(events::id.asc())
     .load(&mut conn).await?;"#;
 
+const R_ARRAY_PARAM_SQL: &str = "SELECT id, tenant_id FROM cookbook_events \
+WHERE has(CAST([1, 4], 'Array(UInt64)'), id) ORDER BY id";
+
+const R_ARRAY_PARAM_RUST: &str = r#"use diesel::sql_types::Text;
+use diesel_clickhouse::{array_exists2, bind, has, lambda2};
+use diesel_clickhouse::sql_types::{Array, UInt64};
+
+type EventIds = Array<UInt64>;
+let rows: Vec<(u64, String)> = events::table
+    .filter(has(bind::<EventIds, _>(vec![1_u64, 4_u64]), events::id))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;
+
+// Parallel string arrays for ClickHouse's higher-order `arrayExists` lambda.
+type TextArray = Array<Text>;
+let allowed_ids: Vec<u64> = events::table
+    .filter(array_exists2(
+        lambda2(
+            "allowed_tenant",
+            "allowed_status",
+            "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+        ),
+        bind::<TextArray, _>(vec!["acme".to_owned(), "beta".to_owned()]),
+        bind::<TextArray, _>(vec!["ok".to_owned(), "fail".to_owned()]),
+    ))
+    .select(events::id)
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_VECTOR_SQL: &str = "SELECT id, \
+toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, [1.0, 0.0]))) AS score \
+FROM cookbook_documents WHERE tenant_id = 'acme' ORDER BY score DESC, id ASC";
+
+const R_VECTOR_RUST: &str = r#"use diesel::sql_types::Float;
+use diesel_clickhouse::{alias_ref, expr_as, named_param, vector_dot_product_f32};
+use diesel_clickhouse::sql_types::Array;
+
+type Float32Array = Array<Float>;
+let query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+let rows: Vec<(u64, f32)> = documents::table
+    .filter(documents::tenant_id.eq("acme"))
+    .select((
+        documents::id,
+        expr_as(
+            vector_dot_product_f32(documents::embedding, query_vector),
+            "score",
+        ),
+    ))
+    .order(alias_ref::<Float>("score").desc())
+    .then_order_by(documents::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_COSINE_SQL: &str = "SELECT id, \
+toFloat32(if(1.0 = 0 OR sqrt(arraySum(arrayMap(x -> x * x, embedding))) = 0, 0, \
+toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, [1.0, 0.0]))) / \
+(sqrt(arraySum(arrayMap(x -> x * x, embedding))) * 1.0))) AS score \
+FROM cookbook_documents WHERE tenant_id = 'acme' ORDER BY score DESC, id ASC";
+
+const R_COSINE_RUST: &str = r#"use diesel::sql_types::Float;
+use diesel_clickhouse::{
+    alias_ref, cosine_similarity_f32_with_query_norm, expr_as, named_param,
+};
+use diesel_clickhouse::sql_types::Array;
+
+type Float32Array = Array<Float>;
+let query_embedding = vec![1.0_f32, 0.0_f32];
+let query_norm = query_embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+let query_vector = named_param::<Float32Array, _>("q", query_embedding);
+let rows: Vec<(u64, f32)> = documents::table
+    .filter(documents::tenant_id.eq("acme"))
+    .select((
+        documents::id,
+        expr_as(
+            cosine_similarity_f32_with_query_norm(
+                documents::embedding,
+                query_vector,
+                query_norm,
+            ),
+            "score",
+        ),
+    ))
+    .order(alias_ref::<Float>("score").desc())
+    .then_order_by(documents::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_STRUCT_RUST: &str = r#"#[derive(Debug, Queryable)]
+struct TenantOverview {
+    tenant_id: String,
+    n: u64,
+    ok: i64,
+}
+
+let overview: Vec<TenantOverview> = events::table
+    .group_by(events::tenant_id)
+    .select((
+        events::tenant_id,
+        expr_as(count(), "n"),
+        expr_as(count_if(events::success), "ok"),
+    ))
+    .order(events::tenant_id.asc())
+    .load(&mut conn).await?;
+
+#[derive(Debug, QueryableByName)]
+struct DocumentHit {
+    #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+    id: u64,
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    text: String,
+    #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+    source_type: Option<String>,
+    #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
+    embedding: Vec<f32>,
+}
+
+let hits: Vec<DocumentHit> = diesel::sql_query(
+    "SELECT id, text, nullIf(source_type, '') AS source_type, embedding \
+     FROM cookbook_documents WHERE tenant_id = ? ORDER BY id LIMIT 2",
+)
+.bind::<diesel::sql_types::Text, _>("acme")
+.load(&mut conn).await?;
+
+#[derive(Debug, clickhouse::Row, serde::Deserialize)]
+struct DocumentHitRow {
+    id: u64,
+    text: String,
+}
+
+let row_bridge_hits: Vec<DocumentHitRow> = conn
+    .load_clickhouse_rows(
+        documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((documents::id, documents::text))
+            .order(documents::id.asc())
+            .limit(2_i64),
+    )
+    .await?;"#;
+
 const R_METADATA_RUST: &str = r#"use diesel_clickhouse::to_sql_with_metadata;
 
 let query = events::table
     .filter(events::tenant_id.eq("acme"))
     .filter(events::success.eq(true))
+    .filter(diesel::dsl::sql::<diesel::sql_types::Bool>(
+        "has({allowed:Array(String)}, tags)",
+    ))
     .select(events::id);
 
 let rendered = to_sql_with_metadata(&query)?;
-// rendered.sql                      -> the SQL string, with `?` placeholders
-// rendered.positional_bind_count()  -> how many values to bind, in order
-// rendered.named_parameters()       -> ClickHouse {name:Type} HTTP params"#;
+// rendered.sql                         -> the SQL string, with `?` placeholders
+// rendered.positional_bind_count()     -> how many values to bind, in order
+// rendered.positional_bind_types()     -> ClickHouse type per Diesel bind
+// rendered.named_parameters()          -> unique ClickHouse {name:Type} names
+// rendered.named_parameter_details()   -> name/type/occurrence-count summaries"#;
 
 const R_INSERT_RUST: &str = r#"// Single row, through Diesel:
 diesel::insert_into(tenants::table)

@@ -82,6 +82,7 @@ mod joins;
 mod json;
 mod operators;
 mod ordering;
+mod params;
 mod predicate;
 mod serialize;
 mod types;
@@ -96,8 +97,8 @@ pub use aggregates::{
     quantile_tdigest, quantile_timing, quantiles, quantiles_timing, top_k,
 };
 pub use backend::{
-    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, RenderedSql, RenderedSqlMetadata,
-    analyze_rendered_sql, to_sql, to_sql_with_metadata,
+    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, NamedParameterMetadata,
+    RenderedSql, RenderedSqlMetadata, analyze_rendered_sql, to_sql, to_sql_with_metadata,
 };
 pub use bind::{BoundValue, bind};
 pub use cast::{
@@ -115,7 +116,7 @@ pub use clauses::{
 pub use clickhouse;
 pub use connection::{
     AsyncClickHouseConnection, ClickHouseConnectionOptions, ClickHouseField, ClickHouseRow,
-    ClickHouseTransactionManager,
+    ClickHouseTransactionManager, InsertBatchOptions,
 };
 pub use ddl::{
     AlterTable, BufferEngine, Column, CreateMaterializedView, CreateMaterializedViewBuilder,
@@ -140,33 +141,34 @@ pub use functions::{
     is_ipv4_string, is_ipv6_string, is_not_null, is_null, is_valid_json, json_exists,
     json_extract_bool, json_extract_float, json_extract_int, json_extract_int_ci, json_extract_raw,
     json_extract_raw_ci, json_extract_string, json_extract_string_ci, json_extract_uint, json_has,
-    json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm, least, length,
-    like, like_escape, linf_distance, linf_norm, lower, mann_whitney_u_test, map_contains,
-    map_from_arrays, map_keys, map_values, max_if, max_merge, max_state, min_if, min_merge,
-    min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any, multi_fuzzy_match_any_index,
-    multi_match_all_indices, multi_match_any, multi_match_any_index, not_empty, not_ilike,
-    not_ilike_escape, not_like, not_like_escape, position, regexp_match, replace_all, round,
-    simple_json_extract_float, simple_json_extract_int, simple_json_extract_string,
-    simple_json_has, sip_hash64, stddev_pop, stddev_pop_stable, stddev_samp, stddev_samp_stable,
-    substring, sum_if, sum_merge, sum_merge_state, sum_state, to_bool, to_date, to_date_time,
-    to_date_time64, to_day_of_month, to_float32, to_float64, to_float64_or_null,
-    to_float64_or_zero, to_hour, to_int8, to_int16, to_int32, to_int32_or_null, to_int64,
-    to_int64_or_null, to_int64_or_zero, to_int128, to_int256, to_ipv4, to_ipv6, to_minute,
-    to_month, to_start_of_day, to_start_of_hour, to_start_of_minute, to_start_of_month,
-    to_start_of_year, to_string, to_uint8, to_uint16, to_uint32, to_uint32_or_null, to_uint64,
-    to_uint64_or_null, to_uint64_or_zero, to_uint128, to_uint256, to_unix_timestamp, to_year,
-    top_level_domain, try_base64_decode, unhex, uniq, uniq_exact, uniq_exact_if, uniq_exact_merge,
-    uniq_exact_state, uniq_if, uniq_merge, uniq_state, upper, url_fragment, url_path,
-    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, var_samp,
-    var_samp_stable, xx_hash64,
+    json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm, least,
+    left_utf8, length, length_utf8, like, like_escape, linf_distance, linf_norm, lower,
+    mann_whitney_u_test, map_contains, map_from_arrays, map_keys, map_values, max_if, max_merge,
+    max_state, min_if, min_merge, min_state, multi_fuzzy_match_all_indices, multi_fuzzy_match_any,
+    multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any, multi_match_any_index,
+    not_empty, not_ilike, not_ilike_escape, not_like, not_like_escape, null_if, position,
+    position_case_insensitive, regexp_match, replace_all, round, simple_json_extract_float,
+    simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64, stddev_pop,
+    stddev_pop_stable, stddev_samp, stddev_samp_stable, substring, sum_if, sum_merge,
+    sum_merge_state, sum_state, to_bool, to_date, to_date_time, to_date_time64, to_day_of_month,
+    to_float32, to_float64, to_float64_or_null, to_float64_or_zero, to_hour, to_int8, to_int16,
+    to_int32, to_int32_or_null, to_int64, to_int64_or_null, to_int64_or_zero, to_int128, to_int256,
+    to_ipv4, to_ipv6, to_minute, to_month, to_start_of_day, to_start_of_hour, to_start_of_minute,
+    to_start_of_month, to_start_of_year, to_string, to_uint8, to_uint16, to_uint32,
+    to_uint32_or_null, to_uint64, to_uint64_or_null, to_uint64_or_zero, to_uint128, to_uint256,
+    to_unix_timestamp, to_year, top_level_domain, try_base64_decode, unhex, uniq, uniq_exact,
+    uniq_exact_if, uniq_exact_merge, uniq_exact_state, uniq_if, uniq_merge, uniq_state, upper,
+    url_fragment, url_path, url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable,
+    var_samp, var_samp_stable, xx_hash64,
 };
 pub use grouping::{
     GroupByAll, GroupByModifier, GroupByModifierKind, Grouping, GroupingSets, cube, group_by_all,
     grouping, grouping_sets, rollup, with_totals,
 };
 pub use higher_order::{
-    HigherOrderFunction, Lambda, array_all, array_count, array_exists, array_filter, array_map,
-    array_map_as, lambda, lambda_params, lambda2, map_apply, map_filter,
+    BinaryHigherOrderFunction, HigherOrderFunction, Lambda, array_all, array_count, array_exists,
+    array_exists2, array_filter, array_map, array_map_as, lambda, lambda_params, lambda2,
+    map_apply, map_filter,
 };
 pub use joins::{
     AliasedColumn, ClickHouseJoin, ClickHouseJoinBuilder, ClickHouseJoinDsl, JoinColumn, JoinKind,
@@ -183,12 +185,14 @@ pub use operators::{
     ClickHouseTextExpressionMethods, GlobalIn, GlobalInDsl, ILike, NotGlobalIn, NotGlobalInDsl,
     NotILike,
 };
-pub use ordering::{FillBound, NoFillBound, WithFill, with_fill};
+pub use ordering::{AliasRef, FillBound, NoFillBound, WithFill, alias_ref, with_fill};
+pub use params::{NamedParam, ch_param, named_param};
 pub use predicate::{When, when};
 pub use vectors::{
-    VectorBytes, VectorBytesEncoding, VectorLiteral, vector_f32, vector_f32_binary, vector_f32_hex,
-    vector_f32_le_bytes, vector_f32_le_hex, vector_f64, vector_f64_binary, vector_f64_hex,
-    vector_f64_le_bytes, vector_f64_le_hex,
+    CosineSimilarityF32, VectorBytes, VectorBytesEncoding, VectorDotProductF32, VectorLiteral,
+    cosine_similarity_f32_with_query_norm, vector_dot_product_f32, vector_f32, vector_f32_binary,
+    vector_f32_hex, vector_f32_le_bytes, vector_f32_le_hex, vector_f64, vector_f64_binary,
+    vector_f64_hex, vector_f64_le_bytes, vector_f64_le_hex,
 };
 pub use window::{
     NoWindowBindings, NoWindowFrame, NoWindowOrder, NoWindowPartition, Over, OverDsl, OverWindow,

@@ -319,8 +319,12 @@ where
     ST: SqlType,
     ClickHouse: HasSqlType<ST>,
 {
-    fn metadata(_: &mut Self::MetadataLookup) -> Self::TypeMetadata {
-        ClickHouseTypeMetadata::new("Array")
+    fn metadata(lookup: &mut Self::MetadataLookup) -> Self::TypeMetadata {
+        let inner = <ClickHouse as HasSqlType<ST>>::metadata(lookup);
+        ClickHouseTypeMetadata::with_parameter_type(
+            "Array",
+            format!("Array({})", inner.parameter_type()),
+        )
     }
 }
 

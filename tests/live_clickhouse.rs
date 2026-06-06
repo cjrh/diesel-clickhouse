@@ -11,6 +11,7 @@
 //!     cargo test --test live_clickhouse -- --ignored --nocapture
 
 use std::error::Error;
+use std::time::Duration;
 
 use diesel::prelude::*;
 // Bring diesel-async's `RunQueryDsl` into scope explicitly. An explicit import
@@ -24,20 +25,22 @@ use testcontainers_modules::{
 
 use diesel_clickhouse::{
     AsyncClickHouseConnection, ClickHouseConnectionOptions, ClickHouseJoinDsl, ClickHouseQueryDsl,
-    ClickHouseTextExpressionMethods, Column, DataType, NestedField, OverDsl, Setting, TableEngine,
-    TableIndex, abs, accurate_cast_or_null, aggregate, aggregating_merge_tree, alter_table,
-    analysis_of_variance, approx_top_sum, array_count, array_exists, array_filter, array_map,
-    base64_decode, base64_encode, cast, ceil, city_hash64, concat, corr, count, count_if,
-    count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    ClickHouseTextExpressionMethods, Column, DataType, InsertBatchOptions, NestedField, OverDsl,
+    Setting, TableEngine, TableIndex, abs, accurate_cast_or_null, aggregate,
+    aggregating_merge_tree, alias_ref, alter_table, analysis_of_variance, approx_top_sum,
+    array_count, array_exists, array_exists2, array_filter, array_map, base64_decode,
+    base64_encode, cast, ceil, city_hash64, concat, corr, cosine_similarity_f32_with_query_norm,
+    count, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
     create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
     domain_without_www, expr_as, farm_fingerprint64, final_table, finalize_aggregation,
     first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
     ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
     is_ipv6_string, is_null, is_valid_json, join_column, json_extract_int, json_extract_int_path,
     json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
-    lambda2, least, length, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
-    max_if, merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment,
-    partition_by, partition_expr, position, prewhere, projection, quantile, quantile_deterministic,
+    lambda2, least, left_utf8, length, length_utf8, lower, mann_whitney_u_test, map_apply,
+    map_contains, map_filter, max_if, merge_tree, min_if, multi_match_any, multi_match_any_index,
+    mutation_assignment, named_param, null_if, partition_by, partition_expr, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
     quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
     replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
     simple_json_extract_string, simple_json_has, sip_hash64, source_column, stddev_pop,
@@ -45,8 +48,8 @@ use diesel_clickhouse::{
     to_date_time, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4,
     to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null, top_k, top_level_domain,
     try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path,
-    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, vector_f32, with_fill,
-    xx_hash64,
+    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, vector_dot_product_f32,
+    vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -120,6 +123,21 @@ diesel::table! {
 }
 
 diesel::table! {
+    use diesel::sql_types::*;
+    use diesel_clickhouse::sql_types::*;
+
+    #[sql_name = "diesel_clickhouse_gold_documents"]
+    gold_documents (id) {
+        id -> UInt32,
+        tenant_id -> Text,
+        text -> Text,
+        source_type -> Text,
+        processed_at -> DateTime64,
+        embedding -> Array<Float>,
+    }
+}
+
+diesel::table! {
     #[sql_name = "diesel_clickhouse_connection_inserts"]
     connection_inserts (id) {
         id -> BigInt,
@@ -150,7 +168,8 @@ diesel::allow_tables_to_appear_in_same_query!(
     tenant_rates,
     aggregate_states,
     mv_source,
-    image_vectors
+    image_vectors,
+    gold_documents
 );
 
 // Single-row inserts through Diesel require `treat_none_as_default_value =
@@ -208,6 +227,7 @@ async fn setup(client: &clickhouse::Client) -> TestResult<()> {
         "DROP TABLE IF EXISTS diesel_clickhouse_mv_target",
         "DROP TABLE IF EXISTS diesel_clickhouse_mv_source",
         "DROP TABLE IF EXISTS diesel_clickhouse_image_vectors",
+        "DROP TABLE IF EXISTS diesel_clickhouse_gold_documents",
         "DROP TABLE IF EXISTS diesel_clickhouse_type_showcase",
         "DROP TABLE IF EXISTS diesel_clickhouse_projection_rollups",
         "DROP TABLE IF EXISTS diesel_clickhouse_summing_rollups",
@@ -356,6 +376,50 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             row_variant: String,
         }
 
+        #[derive(Debug, PartialEq, clickhouse::Row, serde::Deserialize)]
+        struct ClickHouseDocumentScore {
+            id: u32,
+            text: String,
+            score: f32,
+        }
+
+        #[derive(Debug, PartialEq, QueryableByName)]
+        struct ConnectionWideNamedRow {
+            #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+            id64: u64,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::UInt32)]
+            id32: u32,
+            #[diesel(column_name = tenant_id)]
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            row_tenant_id: String,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Integer>)]
+            maybe_rank: Option<i32>,
+            #[diesel(sql_type = diesel::sql_types::Float)]
+            score: f32,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Uuid)]
+            uuid_value: String,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::DateTime64)]
+            processed_at: String,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            account_id: Option<String>,
+            #[diesel(sql_type = diesel::sql_types::Nullable<diesel::sql_types::Text>)]
+            source_type: Option<String>,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::UInt64)]
+            count_value: u64,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::UInt32)]
+            status_code: u32,
+            #[diesel(sql_type = diesel::sql_types::Float)]
+            metric_a: f32,
+            #[diesel(sql_type = diesel::sql_types::Integer)]
+            delta: i32,
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            theme: String,
+            #[diesel(sql_type = diesel::sql_types::Text)]
+            sub_theme: String,
+            #[diesel(sql_type = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>)]
+            embedding: Vec<f32>,
+        }
+
         let mut conn = AsyncClickHouseConnection::establish(&diesel_url).await?;
         let mut options_conn = ClickHouseConnectionOptions::from_url(&diesel_url)?
             .option("max_threads", "1")
@@ -373,6 +437,16 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .load(&mut conn)
             .await?;
         assert_eq!(rows, vec![("acme".to_string(), 2)]);
+
+        let settings_rows: Vec<i64> = events
+            .filter(tenant_id.eq("acme"))
+            .select(id)
+            .order(id.asc())
+            .limit(1_i64)
+            .settings([Setting::new("max_threads", 1)])
+            .load(&mut conn)
+            .await?;
+        assert_eq!(settings_rows, vec![1]);
 
         let tag_values: Vec<String> = events
             .filter(id.eq(1_i64))
@@ -411,6 +485,49 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 row_uuid: "550e8400-e29b-41d4-a716-446655440000".to_string(),
                 row_ipv4: "192.0.2.1".to_string(),
                 row_ipv6: "2001:db8::1".to_string(),
+            }
+        );
+
+        let wide_row = diesel::sql_query(
+            "SELECT \
+             toUInt64(42) AS id64, \
+             toUInt32(7) AS id32, \
+             'acme' AS tenant_id, \
+             CAST(NULL, 'Nullable(Int32)') AS maybe_rank, \
+             toFloat32(0.75) AS score, \
+             toUUID('550e8400-e29b-41d4-a716-446655440000') AS uuid_value, \
+             toDateTime64('2024-01-02 03:04:05.123', 3) AS processed_at, \
+             toNullable('account-1') AS account_id, \
+             CAST(NULL, 'Nullable(String)') AS source_type, \
+             toUInt64(99) AS count_value, \
+             toUInt32(2) AS status_code, \
+             toFloat32(1.5) AS metric_a, \
+             toInt32(-4) AS delta, \
+             'theme' AS theme, \
+             'sub-theme' AS sub_theme, \
+             [toFloat32(1), toFloat32(0.5)] AS embedding",
+        )
+        .get_result::<ConnectionWideNamedRow>(&mut conn)
+        .await?;
+        assert_eq!(
+            wide_row,
+            ConnectionWideNamedRow {
+                id64: 42,
+                id32: 7,
+                row_tenant_id: "acme".to_string(),
+                maybe_rank: None,
+                score: 0.75,
+                uuid_value: "550e8400-e29b-41d4-a716-446655440000".to_string(),
+                processed_at: "2024-01-02 03:04:05.123".to_string(),
+                account_id: Some("account-1".to_string()),
+                source_type: None,
+                count_value: 99,
+                status_code: 2,
+                metric_a: 1.5,
+                delta: -4,
+                theme: "theme".to_string(),
+                sub_theme: "sub-theme".to_string(),
+                embedding: vec![1.0, 0.5],
             }
         );
 
@@ -587,6 +704,320 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .await?;
         assert_eq!(server_parameter_null, None);
 
+        diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_gold_documents")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_gold_documents (
+                id UInt32,
+                tenant_id String,
+                text String,
+                source_type String,
+                processed_at DateTime64(3),
+                embedding Array(Float32)
+            ) ENGINE = Memory",
+        )
+        .execute(&mut conn)
+        .await?;
+        diesel::sql_query(
+            r#"INSERT INTO diesel_clickhouse_gold_documents VALUES
+                (1, 'acme', 'Rust ? async guide', 'blog', '2024-01-01 00:00:00.000', [1.0, 0.0]),
+                (2, 'acme', 'ClickHouse diesel notes', '', '2024-01-01 00:05:00.000', [0.2, 0.8]),
+                (3, 'beta', 'Rust analytics', 'doc', '2024-01-01 00:10:00.000', [0.4, 0.6]),
+                (4, 'acme', 'rust diesel clickhouse', 'doc', '2024-01-01 00:15:00.000', [0.9, 0.1])"#,
+        )
+        .execute(&mut conn)
+        .await?;
+
+        let needle = "rust";
+        let score_expr = diesel::dsl::sql::<diesel::sql_types::Float>(
+            "toFloat32(if(positionCaseInsensitive(text, ",
+        )
+        .bind::<diesel::sql_types::Text, _>(needle)
+        .sql(") > 0, 1, 0)) AS score");
+        let match_filter =
+            diesel::dsl::sql::<diesel::sql_types::Bool>("positionCaseInsensitive(text, ")
+                .bind::<diesel::sql_types::Text, _>(needle)
+                .sql(") > 0 AND text != '?' /* ? in comment is not a bind */");
+        let search_rows: Vec<(u32, String, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(match_filter)
+            .select((gold_documents::id, gold_documents::text, score_expr))
+            .order(diesel::dsl::sql::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::processed_at.desc())
+            .then_order_by(gold_documents::id.asc())
+            .limit(10_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            search_rows,
+            vec![
+                (4, "rust diesel clickhouse".to_string(), 1.0),
+                (1, "Rust ? async guide".to_string(), 1.0),
+            ]
+        );
+
+        let optional_neither: Vec<i64> = events
+            .filter(diesel_clickhouse::when(false, tenant_id.eq("ignored")))
+            .filter(diesel_clickhouse::when(false, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_neither, vec![1, 2]);
+
+        let optional_tenant_only: Vec<i64> = events
+            .filter(diesel_clickhouse::when(true, tenant_id.eq("beta")))
+            .filter(diesel_clickhouse::when(false, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_tenant_only, vec![4, 5]);
+
+        let optional_success_only: Vec<i64> = events
+            .filter(diesel_clickhouse::when(false, tenant_id.eq("ignored")))
+            .filter(diesel_clickhouse::when(true, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_success_only, vec![2, 6]);
+
+        let optional_both: Vec<i64> = events
+            .filter(diesel_clickhouse::when(true, tenant_id.eq("beta")))
+            .filter(diesel_clickhouse::when(true, success.eq(false)))
+            .select(id)
+            .order(id.asc())
+            .limit(2_i64)
+            .load(&mut conn)
+            .await?;
+        assert_eq!(optional_both, vec![6]);
+
+        type UInt64Array =
+            diesel_clickhouse::sql_types::Array<diesel_clickhouse::sql_types::UInt64>;
+        type TextArray = diesel_clickhouse::sql_types::Array<diesel::sql_types::Text>;
+        type Float32Array = diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>;
+
+        let selected_by_u64_array: Vec<i64> = events
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("has(")
+                    .bind::<UInt64Array, _>(diesel_clickhouse::bind::<UInt64Array, _>(vec![
+                        1_u64, 4_u64,
+                    ]))
+                    .sql(", toUInt64(id))"),
+            )
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(selected_by_u64_array, vec![1, 4]);
+
+        let selected_by_empty_u64_array: Vec<i64> = events
+            .filter(
+                diesel::dsl::sql::<diesel::sql_types::Bool>("has(")
+                    .bind::<UInt64Array, _>(diesel_clickhouse::bind::<UInt64Array, _>(
+                        Vec::<u64>::new(),
+                    ))
+                    .sql(", toUInt64(id))"),
+            )
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert!(selected_by_empty_u64_array.is_empty());
+
+        let selected_by_parallel_string_arrays: Vec<i64> = events
+            .filter(array_exists2(
+                lambda2(
+                    "allowed_tenant",
+                    "allowed_status",
+                    "allowed_tenant = tenant_id AND allowed_status = if(success, 'ok', 'fail')",
+                ),
+                diesel_clickhouse::bind::<TextArray, _>(vec![
+                    "acme".to_string(),
+                    "beta".to_string(),
+                ]),
+                diesel_clickhouse::bind::<TextArray, _>(vec!["ok".to_string(), "fail".to_string()]),
+            ))
+            .select(id)
+            .order(id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(selected_by_parallel_string_arrays, vec![1, 3, 6]);
+
+        let helper_rows: Vec<(u32, String, Option<String>, i64)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(
+                position_case_insensitive(gold_documents::text, "RUST")
+                    .gt(diesel_clickhouse::bind(0_u64)),
+            )
+            .select((
+                gold_documents::id,
+                left_utf8(gold_documents::text, 4_i64),
+                null_if(gold_documents::source_type, ""),
+                length_utf8(gold_documents::text),
+            ))
+            .order(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            helper_rows,
+            vec![
+                (1, "Rust".to_string(), Some("blog".to_string()), 18),
+                (4, "rust".to_string(), Some("doc".to_string()), 22),
+            ]
+        );
+
+        let vector_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                expr_as(
+                    vector_dot_product_f32(
+                        gold_documents::embedding,
+                        diesel_clickhouse::bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]),
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(vector_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+
+        let reusable_query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+        let named_vector_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .filter(
+                vector_dot_product_f32(gold_documents::embedding, reusable_query_vector.clone())
+                    .gt(0.5_f32),
+            )
+            .select((
+                gold_documents::id,
+                expr_as(
+                    vector_dot_product_f32(gold_documents::embedding, reusable_query_vector),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(named_vector_scores, vec![(1, 1.0), (4, 0.9)]);
+
+        let raw_array_bind_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                expr_as(
+                    diesel::dsl::sql::<diesel::sql_types::Float>(
+                        "arraySum(arrayMap((x, y) -> x * y, embedding, ",
+                    )
+                    .bind::<Float32Array, _>(diesel_clickhouse::bind::<Float32Array, _>(vec![
+                        1.0_f32, 0.0_f32,
+                    ]))
+                    .sql("))"),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(raw_array_bind_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+
+        let cosine_query_vector =
+            named_param::<Float32Array, _>("cosine_q", vec![1.0_f32, 0.0_f32]);
+        let cosine_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                expr_as(
+                    cosine_similarity_f32_with_query_norm(
+                        gold_documents::embedding,
+                        cosine_query_vector,
+                        1.0_f32,
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            cosine_scores
+                .iter()
+                .map(|(row_id, _)| *row_id)
+                .collect::<Vec<_>>(),
+            vec![1, 4, 2]
+        );
+        assert!((cosine_scores[0].1 - 1.0).abs() < 0.0001);
+        assert!((cosine_scores[1].1 - 0.9938837).abs() < 0.0001);
+        assert!((cosine_scores[2].1 - 0.2425356).abs() < 0.0001);
+
+        let conflicting_named_parameter = diesel::select((
+            named_param::<diesel_clickhouse::sql_types::UInt64, _>("same", 1_u64),
+            named_param::<diesel_clickhouse::sql_types::UInt64, _>("same", 2_u64),
+        ))
+        .load::<(u64, u64)>(&mut conn)
+        .await
+        .expect_err("conflicting named parameter values should fail before execution");
+        assert!(
+            conflicting_named_parameter
+                .to_string()
+                .contains("conflicting values for ClickHouse named parameter"),
+            "unexpected error: {conflicting_named_parameter}"
+        );
+
+        let row_bridge_scores: Vec<ClickHouseDocumentScore> = conn
+            .load_clickhouse_rows(
+                gold_documents::table
+                    .filter(gold_documents::tenant_id.eq("acme"))
+                    .select((
+                        gold_documents::id,
+                        gold_documents::text,
+                        expr_as(
+                            vector_dot_product_f32(
+                                gold_documents::embedding,
+                                diesel_clickhouse::bind::<Float32Array, _>(vec![1.0_f32, 0.0_f32]),
+                            ),
+                            "score",
+                        ),
+                    ))
+                    .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+                    .then_order_by(gold_documents::id.asc()),
+            )
+            .await?;
+        assert_eq!(
+            row_bridge_scores,
+            vec![
+                ClickHouseDocumentScore {
+                    id: 1,
+                    text: "Rust ? async guide".to_string(),
+                    score: 1.0,
+                },
+                ClickHouseDocumentScore {
+                    id: 4,
+                    text: "rust diesel clickhouse".to_string(),
+                    score: 0.9,
+                },
+                ClickHouseDocumentScore {
+                    id: 2,
+                    text: "ClickHouse diesel notes".to_string(),
+                    score: 0.2,
+                },
+            ]
+        );
+        diesel::sql_query("DROP TABLE diesel_clickhouse_gold_documents")
+            .execute(&mut conn)
+            .await?;
+
         diesel::sql_query("DROP TABLE IF EXISTS diesel_clickhouse_connection_spike")
             .execute(&mut conn)
             .await?;
@@ -692,7 +1123,13 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             },
         ];
         let batch_count = conn
-            .insert_batch("diesel_clickhouse_connection_batch", batch)
+            .insert_batch_with_options(
+                "diesel_clickhouse_connection_batch",
+                batch,
+                InsertBatchOptions::new()
+                    .timeouts(Some(Duration::from_secs(5)), Some(Duration::from_secs(10)))
+                    .setting("query_id", "diesel_clickhouse_connection_batch_options"),
+            )
             .await?;
         assert_eq!(batch_count, 3);
 
@@ -709,6 +1146,44 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
                 (12, "gamma".to_string()),
             ]
         );
+
+        diesel::sql_query("DROP DATABASE IF EXISTS diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query("CREATE DATABASE diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
+        diesel::sql_query(
+            "CREATE TABLE diesel_clickhouse_batch_db.connection_batch (id Int64, tenant_id String) \
+             ENGINE = Memory",
+        )
+        .execute(&mut conn)
+        .await?;
+        let qualified_batch_count = conn
+            .insert_batch(
+                "diesel_clickhouse_batch_db.connection_batch",
+                vec![BatchRow {
+                    id: 20,
+                    tenant_id: "qualified".to_string(),
+                }],
+            )
+            .await?;
+        assert_eq!(qualified_batch_count, 1);
+        let qualified_rows: Vec<ConnectionRow> = diesel::sql_query(
+            "SELECT id, tenant_id FROM diesel_clickhouse_batch_db.connection_batch ORDER BY id",
+        )
+        .load(&mut conn)
+        .await?;
+        assert_eq!(
+            qualified_rows,
+            vec![ConnectionRow {
+                row_id: 20,
+                row_tenant_id: "qualified".to_string(),
+            }]
+        );
+        diesel::sql_query("DROP DATABASE diesel_clickhouse_batch_db")
+            .execute(&mut conn)
+            .await?;
         diesel::sql_query("DROP TABLE diesel_clickhouse_connection_batch")
             .execute(&mut conn)
             .await?;

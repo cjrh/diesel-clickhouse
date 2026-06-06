@@ -17,6 +17,7 @@ use std::error::Error as StdError;
 use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
+use std::time::Duration;
 
 use diesel::connection::{
     CacheSize, Instrumentation, InstrumentationEvent, StrQueryHelper, TransactionManagerStatus,
@@ -34,7 +35,10 @@ use futures_util::future::BoxFuture;
 use futures_util::stream::{self, BoxStream};
 use futures_util::{FutureExt, StreamExt};
 
-use crate::backend::{ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata};
+use crate::backend::{
+    ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, analyze_rendered_sql,
+};
+use crate::params::{INTERNAL_PARAMETER_PREFIX, split_named_parameter_bind};
 
 /// A native async Diesel connection for ClickHouse over HTTP.
 ///
@@ -86,6 +90,55 @@ pub struct ClickHouseConnectionOptions {
     password: Option<String>,
     database: Option<String>,
     options: BTreeMap<String, String>,
+}
+
+/// Per-call options for [`AsyncClickHouseConnection::insert_batch_with_options`].
+///
+/// These options are applied to the native ClickHouse RowBinary `INSERT` used
+/// by `insert_batch`: `send_timeout` bounds each chunk write, `end_timeout`
+/// bounds waiting for the server response at commit, and settings are scoped to
+/// this one insert request.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InsertBatchOptions {
+    send_timeout: Option<Duration>,
+    end_timeout: Option<Duration>,
+    settings: BTreeMap<String, String>,
+}
+
+impl InsertBatchOptions {
+    /// Create empty insert options.
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the timeout for sending each RowBinary chunk.
+    pub fn send_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.send_timeout = timeout.into();
+        self
+    }
+
+    /// Set the timeout for waiting for ClickHouse to finish the INSERT.
+    pub fn end_timeout(mut self, timeout: impl Into<Option<Duration>>) -> Self {
+        self.end_timeout = timeout.into();
+        self
+    }
+
+    /// Set both RowBinary insert timeouts.
+    pub fn timeouts(
+        mut self,
+        send_timeout: impl Into<Option<Duration>>,
+        end_timeout: impl Into<Option<Duration>>,
+    ) -> Self {
+        self.send_timeout = send_timeout.into();
+        self.end_timeout = end_timeout.into();
+        self
+    }
+
+    /// Add or replace a ClickHouse setting for this insert request.
+    pub fn setting(mut self, name: impl Into<String>, value: impl Into<String>) -> Self {
+        self.settings.insert(name.into(), value.into());
+        self
+    }
 }
 
 impl ClickHouseConnectionOptions {
@@ -209,6 +262,27 @@ impl AsyncClickHouseConnection {
         &self.client
     }
 
+    /// Execute a Diesel-built read query and decode rows with the `clickhouse`
+    /// crate's `Row` derive.
+    ///
+    /// This is a migration bridge for code that already has
+    /// `#[derive(clickhouse::Row, serde::Deserialize)]` read structs. The query
+    /// is still rendered and parameterized by `AsyncClickHouseConnection`, so
+    /// Diesel owns the bind values; only the response decoding switches from
+    /// Diesel's `Queryable`/`QueryableByName` traits to ClickHouse RowBinary.
+    /// Prefer ordinary `diesel_async::RunQueryDsl::load` for new Diesel-first
+    /// code, and use this when it materially reduces migration boilerplate.
+    pub async fn load_clickhouse_rows<Row, T>(&mut self, source: T) -> QueryResult<Vec<Row>>
+    where
+        T: AsQuery,
+        T::Query: QueryFragment<ClickHouse> + QueryId,
+        Row: clickhouse::RowOwned + clickhouse::RowRead,
+    {
+        let query = source.as_query();
+        let prepared = self.render_query(&query)?;
+        self.load_clickhouse_rows_prepared(prepared).await
+    }
+
     /// Insert many rows in a single columnar RowBinary request, returning the
     /// number of rows sent.
     ///
@@ -221,11 +295,14 @@ impl AsyncClickHouseConnection {
     /// write path ClickHouse is built for.
     ///
     /// `Row` is a `#[derive(clickhouse::Row, serde::Serialize)]` struct whose
-    /// fields name and type the target columns; `table` is the unquoted table
-    /// name. The batch is validated against the table's schema before sending
-    /// (a one-time metadata fetch). The whole insert is atomic from the client's
-    /// perspective: it is only committed when the final request returns `200`,
-    /// so an error means no rows from this call were accepted.
+    /// fields name and type the target columns; `table` is a bare or
+    /// database-qualified table identifier. The identifier is validated before
+    /// execution. The batch is validated against the table's
+    /// schema before sending (a one-time metadata fetch). The whole insert is
+    /// atomic from the client's perspective: it is only committed when the final
+    /// request returns `200`, so an error means no rows from this call were
+    /// accepted. Use [`insert_batch_with_options`](Self::insert_batch_with_options)
+    /// when one insert needs timeouts or settings.
     ///
     /// ```ignore
     /// #[derive(clickhouse::Row, serde::Serialize)]
@@ -244,11 +321,41 @@ impl AsyncClickHouseConnection {
         Row: clickhouse::RowOwned + clickhouse::RowWrite,
         Rows: IntoIterator<Item = Row>,
     {
+        self.insert_batch_with_options(table, rows, InsertBatchOptions::default())
+            .await
+    }
+
+    /// Insert many rows with per-call RowBinary options.
+    ///
+    /// This is the same high-throughput path as [`insert_batch`](Self::insert_batch),
+    /// but lets callers preserve operational bounds such as send/end timeouts or
+    /// one-off ClickHouse insert settings without configuring a separate client.
+    /// The table name may be bare (`events`) or database-qualified
+    /// (`analytics.events`); each identifier segment is validated before being
+    /// passed to the ClickHouse client.
+    pub async fn insert_batch_with_options<Row, Rows>(
+        &mut self,
+        table: &str,
+        rows: Rows,
+        options: InsertBatchOptions,
+    ) -> QueryResult<usize>
+    where
+        Row: clickhouse::RowOwned + clickhouse::RowWrite,
+        Rows: IntoIterator<Item = Row>,
+    {
+        let escaped_table = escaped_table_identifier(table)?;
         let mut insert = self
             .client
-            .insert::<Row>(table)
+            .insert_unescaped::<Row>(&escaped_table)
             .await
             .map_err(clickhouse_error)?;
+        if options.send_timeout.is_some() || options.end_timeout.is_some() {
+            insert = insert.with_timeouts(options.send_timeout, options.end_timeout);
+        }
+        for (name, value) in options.settings {
+            insert = insert.with_setting(name, value);
+        }
+
         let mut written = 0usize;
         for row in rows {
             insert.write(&row).await.map_err(clickhouse_error)?;
@@ -340,6 +447,38 @@ impl AsyncClickHouseConnection {
         .await;
 
         let result = result.and_then(|bytes| parse_rows(&bytes));
+        self.instrumentation
+            .on_connection_event(InstrumentationEvent::finish_query(
+                &query,
+                result.as_ref().err(),
+            ));
+        result
+    }
+
+    async fn load_clickhouse_rows_prepared<Row>(
+        &mut self,
+        prepared: PreparedQuery,
+    ) -> QueryResult<Vec<Row>>
+    where
+        Row: clickhouse::RowOwned + clickhouse::RowRead,
+    {
+        let query = StrQueryHelper::new(&prepared.sql);
+        self.instrumentation
+            .on_connection_event(InstrumentationEvent::start_query(&query));
+
+        let client_sql = escape_clickhouse_client_template(&prepared.sql);
+        let result = async {
+            let mut http_query = self.client.query(&client_sql);
+            for (name, value) in prepared.params {
+                http_query = http_query.with_setting(name, value);
+            }
+            http_query
+                .fetch_all::<Row>()
+                .await
+                .map_err(clickhouse_error)
+        }
+        .await;
+
         self.instrumentation
             .on_connection_event(InstrumentationEvent::finish_query(
                 &query,
@@ -586,6 +725,46 @@ fn database_from_path(parsed: &url::Url) -> Option<String> {
         .map(str::to_owned)
 }
 
+fn escaped_table_identifier(table: &str) -> QueryResult<String> {
+    if table.trim() != table || table.is_empty() {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse table name: {table:?}").into(),
+        ));
+    }
+
+    let mut escaped = String::with_capacity(table.len() + 2);
+    for (idx, segment) in table.split('.').enumerate() {
+        validate_bare_identifier(segment, "table identifier")?;
+        if idx > 0 {
+            escaped.push('.');
+        }
+        escaped.push('`');
+        escaped.push_str(segment);
+        escaped.push('`');
+    }
+    Ok(escaped)
+}
+
+fn validate_bare_identifier(value: &str, kind: &str) -> QueryResult<()> {
+    let mut chars = value.chars();
+    let Some(first) = chars.next() else {
+        return Err(Error::QueryBuilderError(
+            format!("empty ClickHouse {kind}").into(),
+        ));
+    };
+    if !(first == '_' || first.is_ascii_alphabetic()) {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse {kind}: {value:?}").into(),
+        ));
+    }
+    if chars.any(|ch| !(ch == '_' || ch.is_ascii_alphanumeric())) {
+        return Err(Error::QueryBuilderError(
+            format!("invalid ClickHouse {kind}: {value:?}").into(),
+        ));
+    }
+    Ok(())
+}
+
 #[derive(Debug, Clone)]
 struct PreparedQuery {
     sql: String,
@@ -606,8 +785,11 @@ fn parameterize_binds(
     metadata: &[ClickHouseTypeMetadata],
     binds: &[Option<Vec<u8>>],
 ) -> QueryResult<PreparedQuery> {
+    reject_reserved_sql_parameters(sql)?;
+
     let mut result = String::with_capacity(sql.len());
     let mut params = Vec::new();
+    let positional_binds = collect_named_parameters(&mut params, metadata, binds)?;
     let mut chars = sql.char_indices().peekable();
     let mut bind_idx = 0;
     let mut state = SqlScanState::Code;
@@ -620,10 +802,19 @@ fn parameterize_binds(
                         chars.next();
                         result.push('?');
                     } else {
+                        let Some(&actual_bind_idx) = positional_binds.get(bind_idx) else {
+                            return Err(Error::QueryBuilderError(
+                                format!(
+                                    "ClickHouse query rendered more placeholders than bound values ({})",
+                                    positional_binds.len()
+                                )
+                                .into(),
+                            ));
+                        };
                         push_bind_parameter_or_literal(
                             &mut result,
                             &mut params,
-                            bind_idx,
+                            actual_bind_idx,
                             metadata,
                             binds,
                         )?;
@@ -722,11 +913,11 @@ fn parameterize_binds(
         }
     }
 
-    if bind_idx != binds.len() {
+    if bind_idx != positional_binds.len() {
         return Err(Error::QueryBuilderError(
             format!(
                 "ClickHouse query rendered fewer placeholders ({bind_idx}) than bound values ({})",
-                binds.len()
+                positional_binds.len()
             )
             .into(),
         ));
@@ -736,6 +927,80 @@ fn parameterize_binds(
         sql: result,
         params,
     })
+}
+
+fn reject_reserved_sql_parameters(sql: &str) -> QueryResult<()> {
+    let rendered_metadata = analyze_rendered_sql(sql);
+    if let Some(parameter) = rendered_metadata
+        .named_parameters
+        .iter()
+        .find(|name| name.starts_with(INTERNAL_PARAMETER_PREFIX))
+    {
+        return Err(Error::QueryBuilderError(
+            format!(
+                "ClickHouse parameter name uses reserved diesel-clickhouse prefix: {parameter:?}"
+            )
+            .into(),
+        ));
+    }
+    Ok(())
+}
+
+fn collect_named_parameters(
+    params: &mut Vec<(String, String)>,
+    metadata: &[ClickHouseTypeMetadata],
+    binds: &[Option<Vec<u8>>],
+) -> QueryResult<Vec<usize>> {
+    let mut positional_binds = Vec::new();
+    let mut named_values = BTreeMap::<String, (String, String)>::new();
+
+    for (idx, bind) in binds.iter().enumerate() {
+        let Some(bind_metadata) = metadata.get(idx) else {
+            positional_binds.push(idx);
+            continue;
+        };
+
+        if !bind_metadata.is_named_parameter() {
+            positional_binds.push(idx);
+            continue;
+        }
+
+        let Some(bytes) = bind else {
+            return Err(Error::QueryBuilderError(
+                "ClickHouse named parameters cannot be NULL".into(),
+            ));
+        };
+        let (name, value_bytes) = split_named_parameter_bind(bytes)?;
+        if !supports_server_parameter_type(bind_metadata.parameter_type()) {
+            return Err(Error::QueryBuilderError(
+                format!(
+                    "ClickHouse named parameter {name:?} has unsupported type {}",
+                    bind_metadata.parameter_type()
+                )
+                .into(),
+            ));
+        }
+        let value = server_parameter_value(bind_metadata.name, &Some(value_bytes.to_vec()))?;
+        let setting_name = format!("param_{name}");
+        let type_name = bind_metadata.parameter_type().to_owned();
+
+        if let Some((existing_type, existing_value)) = named_values.get(&setting_name) {
+            if existing_type != &type_name || existing_value != &value {
+                return Err(Error::QueryBuilderError(
+                    format!("conflicting values for ClickHouse named parameter {name:?}").into(),
+                ));
+            }
+        } else {
+            named_values.insert(setting_name, (type_name, value));
+        }
+    }
+
+    params.extend(
+        named_values
+            .into_iter()
+            .map(|(setting_name, (_, value))| (setting_name, value)),
+    );
+    Ok(positional_binds)
 }
 
 #[cfg(test)]
@@ -930,7 +1195,7 @@ fn push_bind_parameter_or_literal(
         return Ok(());
     };
     let parameter_value = server_parameter_value(bind_metadata.name, bind)?;
-    let parameter_name = format!("dc_p{bind_idx}");
+    let parameter_name = format!("{INTERNAL_PARAMETER_PREFIX}p{bind_idx}");
 
     result.push('{');
     result.push_str(&parameter_name);
@@ -1337,6 +1602,31 @@ mod tests {
     }
 
     #[test]
+    fn validate_table_identifier_accepts_bare_and_qualified_names() {
+        assert_eq!(escaped_table_identifier("events").unwrap(), "`events`");
+        assert_eq!(
+            escaped_table_identifier("analytics.events").unwrap(),
+            "`analytics`.`events`"
+        );
+    }
+
+    #[test]
+    fn validate_table_identifier_rejects_unsafe_names() {
+        for table in [
+            "",
+            " events",
+            "events ",
+            "events; DROP TABLE events",
+            "bad-name",
+        ] {
+            assert!(
+                escaped_table_identifier(table).is_err(),
+                "{table:?} should be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn options_from_url_extracts_credentials_database_and_settings() {
         let options = ClickHouseConnectionOptions::from_url(
             "http://url_user:url_password@example.com:8123/path_db?database=query_db&max_threads=1",
@@ -1386,14 +1676,93 @@ mod tests {
 
         assert_eq!(
             prepared.sql,
-            "SELECT '?' AS literal, {dc_p0:String} AS name, {dc_p1:Int32} AS age"
+            "SELECT '?' AS literal, {__diesel_clickhouse_p0:String} AS name, {__diesel_clickhouse_p1:Int32} AS age"
         );
         assert_eq!(
             prepared.params,
             vec![
-                ("param_dc_p0".to_string(), "O\\'Reilly?".to_string()),
-                ("param_dc_p1".to_string(), "42".to_string()),
+                (
+                    "param___diesel_clickhouse_p0".to_string(),
+                    "O\\'Reilly?".to_string()
+                ),
+                ("param___diesel_clickhouse_p1".to_string(), "42".to_string()),
             ]
+        );
+    }
+
+    #[test]
+    fn array_type_metadata_includes_element_type_for_parameters() {
+        let mut lookup = ();
+        let metadata = <ClickHouse as diesel::sql_types::HasSqlType<
+            crate::types::Array<crate::types::UInt64>,
+        >>::metadata(&mut lookup);
+
+        assert_eq!(metadata.name, "Array");
+        assert_eq!(metadata.parameter_type(), "Array(UInt64)");
+    }
+
+    #[test]
+    fn parameterize_binds_uses_typed_array_server_parameters() {
+        let prepared = parameterize_binds(
+            "SELECT has(?, toUInt64(2))",
+            &[ClickHouseTypeMetadata::with_parameter_type(
+                "Array",
+                "Array(UInt64)",
+            )],
+            &[Some(b"[1,2,3]".to_vec())],
+        )
+        .expect("parameterization should succeed");
+
+        assert_eq!(
+            prepared.sql,
+            "SELECT has({__diesel_clickhouse_p0:Array(UInt64)}, toUInt64(2))"
+        );
+        assert_eq!(
+            prepared.params,
+            vec![(
+                "param___diesel_clickhouse_p0".to_string(),
+                "[1,2,3]".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_reserved_raw_parameters() {
+        let err = parameterize_binds("SELECT {__diesel_clickhouse_p0:String}", &[], &[])
+            .expect_err("reserved raw parameter names should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("reserved diesel-clickhouse prefix"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_unbound_placeholders() {
+        let err =
+            parameterize_binds("SELECT ?", &[], &[]).expect_err("placeholder should need a bind");
+
+        assert!(
+            err.to_string()
+                .contains("rendered more placeholders than bound values"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parameterize_binds_rejects_unused_binds() {
+        let err = parameterize_binds(
+            "SELECT '?' AS literal",
+            &[ClickHouseTypeMetadata::new("String")],
+            &[Some(b"unused".to_vec())],
+        )
+        .expect_err("unused bind should be rejected");
+
+        assert!(
+            err.to_string()
+                .contains("rendered fewer placeholders (0) than bound values (1)"),
+            "unexpected error: {err}"
         );
     }
 

@@ -16,10 +16,14 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ | ClickHouse backend marker and query builder | `to_sql(&query)?` | Backtick identifiers, `?` placeholders. |
 | ✅ | Diesel SQL rendering helper | `diesel_clickhouse::to_sql(&events.select(id))?` | Still useful for inspection and external-client execution. |
+| ✅ | Rendered SQL metadata | `to_sql_with_metadata(&query)?.positional_bind_types()` | Reports positional placeholder count, Diesel-collected positional bind ClickHouse types, unique named HTTP parameter names, and `{name:Type}` occurrence summaries for external-client verification. |
+| ✅ 🧪 | Named/reusable HTTP parameters | `let q = named_param::<Array<Float>, _>("q", vec); vector_dot_product_f32(embedding, q.clone())` | Renders `{q:Array(Float32)}` while collecting the value through Diesel. Async execution sends one `param_q` setting and rejects conflicting reused values. |
 | 🧪 | Execute rendered SQL via `clickhouse` crate | `client.query(&to_sql(&query)?).bind(...).fetch_all()` | Live Docker test validates this workflow. |
-| 🚧 🧪 | Diesel `AsyncConnection` adapter | `query.load::<T>(&mut conn).await?` | Native async HTTP-backed `AsyncClickHouseConnection` (a `diesel_async::AsyncConnection`) supports: `establish`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute` Server-side HTTP bind support with escaped-literal fallback where needed `execute` returns the written-row count from `X-ClickHouse-Summary` Primitive/text/nullable rows, arrays, maps, and tuple decoding `Array<T>`→`Vec<T>` `Map<K,V>`→`BTreeMap<K,V>` `Tuple<...>` String-form `Decimal/Date/DateTime/UUID/IP/JSON/Dynamic/Variant` decoding Optional `bigdecimal` support for `Numeric` and Decimal32/64/128/256 `sql_query` `bb8`/`deadpool`/`mobc` pooling behind feature flags Transactions are intentionally unsupported. |
+| 🚧 🧪 | Diesel `AsyncConnection` adapter | `query.load::<T>(&mut conn).await?` | Native async HTTP-backed `AsyncClickHouseConnection` (a `diesel_async::AsyncConnection`) supports: `establish`, `with_client`, explicit `ClickHouseConnectionOptions`, `load`, `execute`, `batch_execute`; Diesel-owned server-side HTTP bind support with escaped-literal fallback where needed; concrete async array binds for `Array(UInt64)`, `Array(String)`, and `Array(Float32)`; raw SQL literal binds; `when(...)` optional predicates; `execute` returns the written-row count from `X-ClickHouse-Summary`; primitive/text/nullable rows, arrays, maps, and tuple decoding (`Array<T>`→`Vec<T>`, `Map<K,V>`→`BTreeMap<K,V>`, `Tuple<...>`); string-form `Decimal`/`Date`/`DateTime`/`UUID`/IP/JSON/Dynamic/Variant decoding; optional `bigdecimal` support; `sql_query`; pooling behind feature flags. Transactions are intentionally unsupported. |
+| ✅ 🧪 | `clickhouse::Row` read bridge | `conn.load_clickhouse_rows(query).await?` | Migration bridge for existing `#[derive(clickhouse::Row, serde::Deserialize)]` read structs: Diesel still renders SQL and owns binds, while RowBinary decoding uses the `clickhouse` crate. Prefer normal `.load`/Diesel derives for new code. |
 | ✅ 🧪 | Single-row insert | `insert_into(t).values((c.eq(v), ...)).execute(&mut conn).await` | Tuple and `#[derive(Insertable)]` (with `#[diesel(treat_none_as_default_value = false)]`) single-row inserts render and execute; `execute` returns the written-row count (`1`). |
-| ✅ 🧪 | Multi-row batch insert | `conn.insert_batch("events", rows).await` | `AsyncClickHouseConnection::insert_batch` drives the `clickhouse` client's native RowBinary inserter—one columnar request per batch—and returns the number of rows sent. `rows` is an iterator of `#[derive(clickhouse::Row, serde::Serialize)]` structs. Live Docker test covers it. |
+| ✅ 🧪 | Multi-row batch insert | `conn.insert_batch("events", rows).await` `conn.insert_batch_with_options("events", rows, InsertBatchOptions::new().timeouts(...)).await` | `AsyncClickHouseConnection::insert_batch` drives the `clickhouse` client's native RowBinary inserter—one columnar request per batch—and returns the number of rows sent. `rows` is an iterator of `#[derive(clickhouse::Row, serde::Serialize)]` structs. Per-insert timeouts/settings and table identifier validation are covered by live Docker tests. |
+| ✅ 🧪 | Bootstrap/admin DDL guidance | `Client::query("CREATE DATABASE IF NOT EXISTS ?").bind(Identifier(db))` then `ClickHouseConnectionOptions::database(db).connect()` | Cookbook live recipe documents creating a database with the direct `clickhouse` client first, then using a database-scoped `AsyncClickHouseConnection` for normal work. |
 | ⬜ | Multi-row batch insert via Diesel's DSL | `insert_into(t).values(vec![...])` | Not expressible: Diesel's `BatchInsert` requires the SQL `DEFAULT` keyword, and the escape-hatch `QueryFragment` impl is orphan-rule-reserved for Diesel's own backends. Use `insert_batch` (above) instead. |
 
 ## ClickHouse SQL types
@@ -57,7 +61,7 @@ Legend:
 | ✅ 🧪 | Scalar `WITH` aliases | `diesel::select(sql("x")).with_alias(sql("1"), "x")` | `WITH 1 AS x SELECT x` |
 | ✅ 🧪 | `WHERE` | `events.filter(tenant_id.eq("acme").and(success.eq(true)))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ 🧪 | `HAVING` | `query.having(count_star().gt(1))` | Diesel built-in, covered with ClickHouse rendering/live examples. |
-| ✅ 🧪 | `ORDER BY` | `query.order(created_at.desc())` | Diesel built-in, covered with ClickHouse rendering/live examples. |
+| ✅ 🧪 | `ORDER BY` | `query.order(created_at.desc())`, `query.order(alias_ref::<Double>("score").desc())` | Diesel built-in, plus validated alias references for ClickHouse `ORDER BY`/`GROUP BY` alias patterns. |
 | ✅ 🧪 | `LIMIT` / `OFFSET` | `query.limit(10).offset(20)` | Diesel built-in, covered with ClickHouse rendering/live examples. |
 | ✅ 🧪 | `LIMIT ... WITH TIES` | `query.limit(1).with_ties()` | `LIMIT ? WITH TIES` |
 | ✅ 🧪 | `LIMIT BY` | `query.limit_by_col(2, "tenant_id")` | `LIMIT 2 BY tenant_id` |
@@ -88,10 +92,10 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression. Use `clickhouse_join(...)` for executable ClickHouse joins. |
 | ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; select columns with `join_column(...)`. |
-| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type. Replaces hand-written `sql::<...>(...)` lists and keeps typed reads. Does not verify the column table is present in the join (orphan-rule limit). |
+| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type. Replaces hand-written `sql::<...>(...)` lists and keeps typed reads. Diesel still requires `allow_tables_to_appear_in_same_query!(...)` for tables that participate together. Does not verify the column table is present in the join (orphan-rule limit). |
 | ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL` and strictness modifiers (`ANY`, `ALL`, `ASOF`), plus join kinds. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
-| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`. |
+| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`/`source_column(...)`. Add `allow_tables_to_appear_in_same_query!(left, right, ...)` next to the schema declarations. |
 
 ## Operators and predicates
 
@@ -100,7 +104,7 @@ Legend:
 | ✅ | `GLOBAL IN` | `tenant_id.global_in(subquery)` |
 | ✅ | `GLOBAL NOT IN` | `tenant_id.not_global_in(subquery)` |
 | ✅ 🧪 | Regular comparison/logical operators | Diesel `.eq()`, `.gt()`, `.and()`, `.or()` built-ins. |
-| ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers. |
+| ✅ 🧪 | ClickHouse lambda operators | `lambda("x", "x > 0")`, `lambda2("k", "v", "v != ''")` for higher-order array/map helpers, including two-array `array_exists2`. |
 | ✅ 🧪 | `LIKE` variants / regexp helpers | Diesel `.like()` / `.not_like()` ClickHouse `.ilike()` / `.not_ilike()` `like`, `like_escape`, `ilike`, `not_ilike` `regexp_match`, `multi_match_any`, `multi_match_any_index`, `multi_fuzzy_match_*` |
 
 ## Scalar functions
@@ -109,12 +113,12 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ 🧪 | Date/time conversion and bucketing | `to_date` `to_date_time` `to_date_time64` `to_start_of_*` `date_diff` `date_trunc` `to_year` `to_month` `to_hour` | intervals, timezone variants, `now*`, `parseDateTime*` |
 | ✅ 🧪 | Conditional/basic/numeric helpers | `if_`, `length`, `empty`, `not_empty`, `int_div`, `abs`, `round`, `floor`, `ceil`, `least`, `greatest` | `multiIf`, `coalesce`, `assumeNotNull` |
-| ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_all` `array_count` | More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
+| ✅ 🧪 | Arrays | `has` `has_any` `has_all` `array_join` `array_element` `array_concat` `array_distinct` `array_map` `array_filter` `array_exists` `array_exists2` `array_all` `array_count` | `array_exists2(lambda2(...), left, right)` covers parallel-array filters while keeping both arrays as Diesel expressions/binds. More specialized helpers like `arrayFirst`, `arrayFold`, `arrayZip` can be added by demand. |
 | ✅ 🧪 | Maps | `map_keys`, `map_values`, `map_contains`, `map_from_arrays`, `map_apply`, `map_filter` | Subscript and more specialized map helpers planned. |
 | ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
-| ✅ 🧪 | Strings | `lower` `upper` `substring` `position` `replace_all` `concat` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
+| ✅ 🧪 | Strings | `lower` `upper` `substring` `left_utf8` `length_utf8` `position` `position_case_insensitive` `replace_all` `concat` `null_if` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain` `domain_without_www` `top_level_domain` `url_path` `base64_encode` `hex` `city_hash64` `to_ipv4` `is_ipv6_string` | More specialized variants can be added by demand. |
-| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` | Exact vector search via `ORDER BY distance ASC LIMIT n`; approximate index DDL below. |
+| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` `vector_dot_product_f32(...)` `cosine_similarity_f32_with_query_norm(...)` | Exact vector search via `ORDER BY distance ASC LIMIT n`; Diesel-owned vector scoring binds via dot-product and cosine helpers; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int*` `to_uint*` `to_float*` `to_*_or_null` `to_*_or_zero` `to_string` `cast::<ST, _>(...)` `accurate_cast*` `is_null` `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
 
 ## Vector search
@@ -125,9 +129,10 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | --- | --- | --- | --- |
 | ✅ 🧪 | Vector literals | `vector_f32([1.0, 0.0])`, `vector_f64([1.0, 2.0])` | Render as ClickHouse array literals. |
 | ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
+| ✅ 🧪 | Cosine scoring helper | `cosine_similarity_f32_with_query_norm(embedding, named_param::<Array<Float>, _>("q", vec), query_norm)` | Renders array primitives for cosine similarity, keeps the query vector Diesel-owned, and lets callers compute/reuse the query norm in Rust. |
 | ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536)` `.distance(VectorDistanceFunction::CosineDistance)` | Render-tested; live fixture keeps exact search portable across server builds. |
 | ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
-| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render-tested. ClickHouse docs recommend true binary client parameters; the HTTP test client string-binds placeholders, so live coverage stays on exact vector literals. |
+| ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render/client-specific. ClickHouse docs recommend true binary client parameters; the async connection's HTTP parameter path is textual, so async vector query values should use `Array(Float32)` binds/named parameters or a hex/client-specific binary path. |
 
 ## Aggregate functions and combinators
 
