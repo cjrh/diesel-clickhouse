@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 
 use diesel::backend::Backend;
 use diesel::expression::{
-    AppearsOnTable, Expression, MixedAggregates, SelectableExpression, ValidGrouping,
+    AppearsOnTable, AsExpression, Expression, MixedAggregates, SelectableExpression, ValidGrouping,
 };
 use diesel::query_builder::{AstPass, QueryFragment, QueryId};
 use diesel::result::{Error, QueryResult};
@@ -63,6 +63,30 @@ where
     Right: Expression<SqlType = Array<Float>>,
 {
     VectorDotProductF32 { left, right }
+}
+
+/// Render cosine similarity over `Array(Float32)` vectors using a caller-computed query norm.
+///
+/// The query vector remains an ordinary Diesel expression, so pass
+/// `bind::<Array<Float>, _>(values)` or `named_param::<Array<Float>, _>(...)` to
+/// keep vector values out of string interpolation. `query_norm` is typically
+/// computed in Rust as `sqrt(sum(x * x))` and is rendered as a normal `Float32`
+/// expression/bind.
+pub fn cosine_similarity_f32_with_query_norm<Left, Right, QueryNorm>(
+    left: Left,
+    right: Right,
+    query_norm: QueryNorm,
+) -> CosineSimilarityF32<Left, Right, QueryNorm::Expression>
+where
+    Left: Expression<SqlType = Array<Float>>,
+    Right: Expression<SqlType = Array<Float>>,
+    QueryNorm: AsExpression<Float>,
+{
+    CosineSimilarityF32 {
+        left,
+        right,
+        query_norm: query_norm.as_expression(),
+    }
 }
 
 /// Decode a hex string expression with `unhex` and reinterpret it as `Array(Float32)`.
@@ -136,6 +160,14 @@ pub struct VectorDotProductF32<Left, Right> {
     right: Right,
 }
 
+/// ClickHouse Float32 cosine-similarity expression.
+#[derive(Debug, Clone)]
+pub struct CosineSimilarityF32<Left, Right, QueryNorm> {
+    left: Left,
+    right: Right,
+    query_norm: QueryNorm,
+}
+
 /// How the input expression should be decoded before reinterpretation.
 #[derive(Debug, Clone, Copy, Hash, PartialEq, Eq)]
 pub enum VectorBytesEncoding {
@@ -188,6 +220,15 @@ where
     type SqlType = Float;
 }
 
+impl<Left, Right, QueryNorm> Expression for CosineSimilarityF32<Left, Right, QueryNorm>
+where
+    Left: Expression<SqlType = Array<Float>>,
+    Right: Expression<SqlType = Array<Float>>,
+    QueryNorm: Expression<SqlType = Float>,
+{
+    type SqlType = Float;
+}
+
 impl<ST, GB> ValidGrouping<GB> for VectorLiteral<ST> {
     type IsAggregate = diesel::expression::is_aggregate::No;
 }
@@ -206,6 +247,21 @@ where
     Left::IsAggregate: MixedAggregates<Right::IsAggregate>,
 {
     type IsAggregate = <Left::IsAggregate as MixedAggregates<Right::IsAggregate>>::Output;
+}
+
+impl<Left, Right, QueryNorm, GB> ValidGrouping<GB> for CosineSimilarityF32<Left, Right, QueryNorm>
+where
+    Left: ValidGrouping<GB>,
+    Right: ValidGrouping<GB>,
+    QueryNorm: ValidGrouping<GB>,
+    Left::IsAggregate: MixedAggregates<Right::IsAggregate>,
+    <Left::IsAggregate as MixedAggregates<Right::IsAggregate>>::Output:
+        MixedAggregates<QueryNorm::IsAggregate>,
+{
+    type IsAggregate =
+        <<Left::IsAggregate as MixedAggregates<Right::IsAggregate>>::Output as MixedAggregates<
+            QueryNorm::IsAggregate,
+        >>::Output;
 }
 
 impl<ST, QS> AppearsOnTable<QS> for VectorLiteral<ST> where Self: Expression {}
@@ -228,6 +284,20 @@ impl<Left, Right, QS> SelectableExpression<QS> for VectorDotProductF32<Left, Rig
     Self: AppearsOnTable<QS>
 {
 }
+impl<Left, Right, QueryNorm, QS> AppearsOnTable<QS> for CosineSimilarityF32<Left, Right, QueryNorm>
+where
+    Left: AppearsOnTable<QS>,
+    Right: AppearsOnTable<QS>,
+    QueryNorm: AppearsOnTable<QS>,
+    Self: Expression,
+{
+}
+impl<Left, Right, QueryNorm, QS> SelectableExpression<QS>
+    for CosineSimilarityF32<Left, Right, QueryNorm>
+where
+    Self: AppearsOnTable<QS>,
+{
+}
 
 impl<ST> QueryId for VectorLiteral<ST> {
     type QueryId = ();
@@ -240,6 +310,11 @@ impl<Expr, ST> QueryId for VectorBytes<Expr, ST> {
 }
 
 impl<Left, Right> QueryId for VectorDotProductF32<Left, Right> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<Left, Right, QueryNorm> QueryId for CosineSimilarityF32<Left, Right, QueryNorm> {
     type QueryId = ();
     const HAS_STATIC_QUERY_ID: bool = false;
 }
@@ -302,13 +377,60 @@ where
     Right: QueryFragment<DB>,
 {
     fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, DB>) -> QueryResult<()> {
-        out.push_sql("toFloat32(arraySum(arrayMap((x, y) -> x * y, ");
-        self.left.walk_ast(out.reborrow())?;
-        out.push_sql(", ");
-        self.right.walk_ast(out.reborrow())?;
+        walk_dot_product(&self.left, &self.right, out.reborrow())
+    }
+}
+
+impl<Left, Right, QueryNorm, DB> QueryFragment<DB> for CosineSimilarityF32<Left, Right, QueryNorm>
+where
+    DB: Backend,
+    Left: QueryFragment<DB>,
+    Right: QueryFragment<DB>,
+    QueryNorm: QueryFragment<DB>,
+{
+    fn walk_ast<'b>(&'b self, mut out: AstPass<'_, 'b, DB>) -> QueryResult<()> {
+        out.push_sql("toFloat32(if(");
+        self.query_norm.walk_ast(out.reborrow())?;
+        out.push_sql(" = 0 OR ");
+        walk_l2_norm(&self.left, out.reborrow())?;
+        out.push_sql(" = 0, 0, ");
+        walk_dot_product(&self.left, &self.right, out.reborrow())?;
+        out.push_sql(" / (");
+        walk_l2_norm(&self.left, out.reborrow())?;
+        out.push_sql(" * ");
+        self.query_norm.walk_ast(out.reborrow())?;
         out.push_sql(")))");
         Ok(())
     }
+}
+
+fn walk_dot_product<'b, Left, Right, DB>(
+    left: &'b Left,
+    right: &'b Right,
+    mut out: AstPass<'_, 'b, DB>,
+) -> QueryResult<()>
+where
+    DB: Backend,
+    Left: QueryFragment<DB>,
+    Right: QueryFragment<DB>,
+{
+    out.push_sql("toFloat32(arraySum(arrayMap((x, y) -> x * y, ");
+    left.walk_ast(out.reborrow())?;
+    out.push_sql(", ");
+    right.walk_ast(out.reborrow())?;
+    out.push_sql(")))");
+    Ok(())
+}
+
+fn walk_l2_norm<'b, Expr, DB>(expr: &'b Expr, mut out: AstPass<'_, 'b, DB>) -> QueryResult<()>
+where
+    DB: Backend,
+    Expr: QueryFragment<DB>,
+{
+    out.push_sql("sqrt(arraySum(arrayMap(x -> x * x, ");
+    expr.walk_ast(out.reborrow())?;
+    out.push_sql(")))");
+    Ok(())
 }
 
 fn bytes_to_hex(bytes: Vec<u8>) -> String {

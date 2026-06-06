@@ -23,9 +23,9 @@ use diesel::prelude::*;
 use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
     ClickHouseConnectionOptions, ClickHouseJoinDsl, DataType, TableEngine, alias_ref,
-    array_exists2, bind, clickhouse, count, count_if, create_table, expr_as, final_table, has,
-    lambda2, named_param, source_column, to_sql, to_sql_with_metadata, vector_dot_product_f32,
-    when,
+    array_exists2, bind, clickhouse, cosine_similarity_f32_with_query_norm, count, count_if,
+    create_table, expr_as, final_table, has, if_, lambda2, named_param, position_case_insensitive,
+    source_column, to_float32, to_sql, to_sql_with_metadata, vector_dot_product_f32, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -362,31 +362,33 @@ async fn main() -> Result<()> {
         disabled.len(),
     ));
 
-    // ----- Recipe: raw fragments with Diesel-owned binds --------------------
+    // ----- Recipe: repeated named parameter for search ----------------------
     doc.recipe(
-        "Raw SQL fragments with Diesel-owned binds",
-        "When you must use a raw fragment, build it with Diesel's SQL literal \
-         binder: start with `sql::<T>(...)`, \
-         call `.bind::<SqlType, _>(value)` at the exact point where the value \
-         belongs, then continue with `.sql(...)`. Do not put a bare `?` inside \
-         `sql::<T>(\"...\")` and bind it later through another client; that \
-         reintroduces the ordering hazard this connection is meant to remove. \
-         Literal question marks inside strings or comments are ignored by the \
-         async connection's placeholder scanner. This recipe intentionally keeps \
-         the function calls raw to show bind placement; prefer typed helpers when \
-         one exists.",
+        "Text search with a repeated named parameter",
+        "When the same value appears more than once, make it a reusable \
+         `named_param` and pass clones into typed helpers. The search text below \
+         appears in both the score projection and the filter, but the async \
+         connection sends one ClickHouse `param_needle` setting. A tiny raw \
+         fragment remains only to demonstrate that literal question marks inside \
+         strings/comments are not treated as bind placeholders.",
     );
     doc.sql(R_RAW_BIND_SQL);
     doc.diesel(R_RAW_BIND_RUST);
-    let needle = "rust";
-    let score_expr =
-        diesel::dsl::sql::<diesel::sql_types::Float>("toFloat32(if(positionCaseInsensitive(text, ")
-            .bind::<diesel::sql_types::Text, _>(needle)
-            .sql(") > 0, 1, 0)) AS score");
-    let match_filter =
-        diesel::dsl::sql::<diesel::sql_types::Bool>("positionCaseInsensitive(text, ")
-            .bind::<diesel::sql_types::Text, _>(needle)
-            .sql(") > 0 AND text != '?' /* ? in comment */");
+    let needle = named_param::<diesel::sql_types::Text, _>("needle", "rust");
+    let score_expr = expr_as(
+        to_float32(if_(
+            position_case_insensitive(documents::text, needle.clone())
+                .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64)),
+            bind::<diesel::sql_types::Float, _>(1.0_f32),
+            bind::<diesel::sql_types::Float, _>(0.0_f32),
+        )),
+        "score",
+    );
+    let match_filter = position_case_insensitive(documents::text, needle)
+        .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64))
+        .and(diesel::dsl::sql::<diesel::sql_types::Bool>(
+            "text != '?' /* ? in comment */",
+        ));
     let orm: Vec<(u64, String, f32)> = documents::table
         .filter(documents::tenant_id.eq("acme"))
         .filter(match_filter)
@@ -402,18 +404,30 @@ async fn main() -> Result<()> {
         &documents::table
             .filter(documents::tenant_id.eq("acme"))
             .filter(
-                diesel::dsl::sql::<diesel::sql_types::Bool>("positionCaseInsensitive(text, ")
-                    .bind::<diesel::sql_types::Text, _>(needle)
-                    .sql(") > 0 AND text != '?' /* ? in comment */"),
+                position_case_insensitive(
+                    documents::text,
+                    named_param::<diesel::sql_types::Text, _>("needle", "rust"),
+                )
+                .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64))
+                .and(diesel::dsl::sql::<diesel::sql_types::Bool>(
+                    "text != '?' /* ? in comment */",
+                )),
             )
             .select((
                 documents::id,
                 documents::text,
-                diesel::dsl::sql::<diesel::sql_types::Float>(
-                    "toFloat32(if(positionCaseInsensitive(text, ",
-                )
-                .bind::<diesel::sql_types::Text, _>(needle)
-                .sql(") > 0, 1, 0)) AS score"),
+                expr_as(
+                    to_float32(if_(
+                        position_case_insensitive(
+                            documents::text,
+                            named_param::<diesel::sql_types::Text, _>("needle", "rust"),
+                        )
+                        .gt(bind::<diesel_clickhouse::sql_types::UInt64, _>(0_u64)),
+                        bind::<diesel::sql_types::Float, _>(1.0_f32),
+                        bind::<diesel::sql_types::Float, _>(0.0_f32),
+                    )),
+                    "score",
+                ),
             ))
             .order(alias_ref::<diesel::sql_types::Float>("score").desc())
             .then_order_by(documents::processed_at.desc())
@@ -454,7 +468,10 @@ async fn main() -> Result<()> {
          (`ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`, `GLOBAL`). The `.on(...)` predicate \
          must be boolean and is written with real, type-checked columns; the \
          projection uses `source_column(...)` for the same reason as `FINAL` \
-         above.",
+         above. The schema prelude for this example includes \
+         `diesel::allow_tables_to_appear_in_same_query!(events, tenants)`; keep \
+         the same Diesel cross-table allowance next to your ClickHouse \
+         `table!` declarations.",
     );
     doc.sql(R_JOIN_SQL);
     doc.diesel(R_JOIN_RUST);
@@ -622,6 +639,55 @@ async fn main() -> Result<()> {
                     vector_dot_product_f32(
                         documents::embedding,
                         named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]),
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(documents::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: cosine similarity ----------------------------------------
+    doc.recipe(
+        "Cosine similarity through async execution",
+        "`cosine_similarity_f32_with_query_norm` covers the common semantic-search \
+         score shape while keeping the query vector as a Diesel-owned \
+         `Array(Float32)` parameter. Compute the query norm once in Rust, pass it \
+         as a scalar bind, and use `alias_ref` for the computed score alias.",
+    );
+    doc.sql(R_COSINE_SQL);
+    doc.diesel(R_COSINE_RUST);
+    let query_norm = 1.0_f32;
+    let query_vector = named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]);
+    let orm: Vec<(u64, f32)> = documents::table
+        .filter(documents::tenant_id.eq("acme"))
+        .select((
+            documents::id,
+            expr_as(
+                cosine_similarity_f32_with_query_norm(
+                    documents::embedding,
+                    query_vector,
+                    query_norm,
+                ),
+                "score",
+            ),
+        ))
+        .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+        .then_order_by(documents::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, f32)> = client.query(R_COSINE_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &documents::table
+            .filter(documents::tenant_id.eq("acme"))
+            .select((
+                documents::id,
+                expr_as(
+                    cosine_similarity_f32_with_query_norm(
+                        documents::embedding,
+                        named_param::<Float32Array, _>("q", vec![1.0_f32, 0.0_f32]),
+                        query_norm,
                     ),
                     "score",
                 ),
@@ -1148,15 +1214,23 @@ ORDER BY score DESC, processed_at DESC, id ASC LIMIT 10";
 
 const R_RAW_BIND_RUST: &str = r#"use diesel::dsl::sql;
 use diesel::sql_types::{Bool, Float, Text};
-use diesel_clickhouse::alias_ref;
+use diesel_clickhouse::{
+    alias_ref, bind, expr_as, if_, named_param, position_case_insensitive, to_float32,
+};
+use diesel_clickhouse::sql_types::UInt64;
 
-let needle = "rust";
-let score = sql::<Float>("toFloat32(if(positionCaseInsensitive(text, ")
-    .bind::<Text, _>(needle)
-    .sql(") > 0, 1, 0)) AS score");
-let matches = sql::<Bool>("positionCaseInsensitive(text, ")
-    .bind::<Text, _>(needle)
-    .sql(") > 0 AND text != '?' /* ? in comment */");
+let needle = named_param::<Text, _>("needle", "rust");
+let score = expr_as(
+    to_float32(if_(
+        position_case_insensitive(documents::text, needle.clone()).gt(bind::<UInt64, _>(0_u64)),
+        bind::<Float, _>(1.0_f32),
+        bind::<Float, _>(0.0_f32),
+    )),
+    "score",
+);
+let matches = position_case_insensitive(documents::text, needle)
+    .gt(bind::<UInt64, _>(0_u64))
+    .and(sql::<Bool>("text != '?' /* ? in comment */"));
 
 let rows: Vec<(u64, String, f32)> = documents::table
     .filter(documents::tenant_id.eq("acme"))
@@ -1183,6 +1257,10 @@ ON cookbook_events.tenant_id = cookbook_tenants.tenant_id \
 ORDER BY cookbook_events.id";
 
 const R_JOIN_RUST: &str = r#"use diesel_clickhouse::{ClickHouseJoinDsl, source_column};
+
+// Put this next to the ClickHouse `table!` declarations for every table pair
+// that can appear together in one Diesel query.
+diesel::allow_tables_to_appear_in_same_query!(events, tenants);
 
 let rows: Vec<(u64, String)> = events::table
     .clickhouse_join(tenants::table)
@@ -1265,6 +1343,39 @@ let rows: Vec<(u64, f32)> = documents::table
         documents::id,
         expr_as(
             vector_dot_product_f32(documents::embedding, query_vector),
+            "score",
+        ),
+    ))
+    .order(alias_ref::<Float>("score").desc())
+    .then_order_by(documents::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_COSINE_SQL: &str = "SELECT id, \
+toFloat32(if(1.0 = 0 OR sqrt(arraySum(arrayMap(x -> x * x, embedding))) = 0, 0, \
+toFloat32(arraySum(arrayMap((x, y) -> x * y, embedding, [1.0, 0.0]))) / \
+(sqrt(arraySum(arrayMap(x -> x * x, embedding))) * 1.0))) AS score \
+FROM cookbook_documents WHERE tenant_id = 'acme' ORDER BY score DESC, id ASC";
+
+const R_COSINE_RUST: &str = r#"use diesel::sql_types::Float;
+use diesel_clickhouse::{
+    alias_ref, cosine_similarity_f32_with_query_norm, expr_as, named_param,
+};
+use diesel_clickhouse::sql_types::Array;
+
+type Float32Array = Array<Float>;
+let query_embedding = vec![1.0_f32, 0.0_f32];
+let query_norm = query_embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+let query_vector = named_param::<Float32Array, _>("q", query_embedding);
+let rows: Vec<(u64, f32)> = documents::table
+    .filter(documents::tenant_id.eq("acme"))
+    .select((
+        documents::id,
+        expr_as(
+            cosine_similarity_f32_with_query_norm(
+                documents::embedding,
+                query_vector,
+                query_norm,
+            ),
             "score",
         ),
     ))

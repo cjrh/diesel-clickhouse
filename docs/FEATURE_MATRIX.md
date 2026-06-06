@@ -92,10 +92,10 @@ Legend:
 | --- | --- | --- | --- |
 | ✅ | Diesel ANSI join rendering | Diesel `.inner_join(...on(...))` | Render-tested. Diesel renders parenthesized join sources that ClickHouse rejects as a table expression. Use `clickhouse_join(...)` for executable ClickHouse joins. |
 | ✅ 🧪 | `GLOBAL JOIN` | `events.clickhouse_join(dim).global().any().inner().using(["tenant_id"])` | Custom ClickHouse join source; select columns with `join_column(...)`. |
-| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type. Replaces hand-written `sql::<...>(...)` lists and keeps typed reads. Does not verify the column table is present in the join (orphan-rule limit). |
+| ✅ 🧪 | Typed join projection | `.select((join_column(events::id), join_column(tenants::plan)))` | `join_column` wraps a table column for selecting from `ClickHouseJoin` while preserving SQL type. Replaces hand-written `sql::<...>(...)` lists and keeps typed reads. Diesel still requires `allow_tables_to_appear_in_same_query!(...)` for tables that participate together. Does not verify the column table is present in the join (orphan-rule limit). |
 | ✅ 🧪 | Join strictness | `.any()`, `.all()`, `.asof()` | ClickHouse join grammar with optional `GLOBAL` and strictness modifiers (`ANY`, `ALL`, `ASOF`), plus join kinds. |
 | ✅ 🧪 | `SEMI` / `ANTI` joins | `.left().semi().using(...)`, `.left().anti().using(...)` | ClickHouse-specific join kinds. |
-| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`. |
+| ✅ 🧪 | `USING` / `ON` helpers | `.using(["tenant_id"])`, `.on(predicate)` | `ON`/`USING` use real, type-checked columns; wrap projected columns with `join_column(...)`/`source_column(...)`. Add `allow_tables_to_appear_in_same_query!(left, right, ...)` next to the schema declarations. |
 
 ## Operators and predicates
 
@@ -118,7 +118,7 @@ Legend:
 | ✅ 🧪 | JSON | `json_extract_*` `json_extract_*_path` `json_extract_*_ci` `json_value` `json_query` `json_exists` `json_has` `json_length` `simple_json_extract_*` `is_valid_json` | Dynamic JSON subcolumn helpers remain planned; case-insensitive helpers are render-tested because ClickHouse docs mark them v25.8+. |
 | ✅ 🧪 | Strings | `lower` `upper` `substring` `left_utf8` `length_utf8` `position` `position_case_insensitive` `replace_all` `concat` `null_if` `regexp_match` `like` `ilike` `multi_match_any` `multi_match_any_index` `multi_match_all_indices` `multi_fuzzy_match_*` | Token functions and specialized search variants can be added by demand. |
 | ✅ 🧪 | URL/IP/encoding/hash | `domain` `domain_without_www` `top_level_domain` `url_path` `base64_encode` `hex` `city_hash64` `to_ipv4` `is_ipv6_string` | More specialized variants can be added by demand. |
-| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` `vector_dot_product_f32(embedding, bind::<Array<Float>, _>(query))` | Exact vector search via `ORDER BY distance ASC LIMIT n`; Diesel-owned vector scoring binds via `vector_dot_product_f32`; approximate index DDL below. |
+| ✅ 🧪 | Vector distance/search | `l2_distance(embedding, vector_f32([..]))` `cosine_distance` `l1_distance` `linf_distance` `l2_norm` `vector_dot_product_f32(...)` `cosine_similarity_f32_with_query_norm(...)` | Exact vector search via `ORDER BY distance ASC LIMIT n`; Diesel-owned vector scoring binds via dot-product and cosine helpers; approximate index DDL below. |
 | ✅ 🧪 | Type conversion | `to_int*` `to_uint*` `to_float*` `to_*_or_null` `to_*_or_zero` `to_string` `cast::<ST, _>(...)` `accurate_cast*` `is_null` `is_not_null` | More date/decimal-specific conversion variants can be added by demand. |
 
 ## Vector search
@@ -129,6 +129,7 @@ ClickHouse vector search stores embeddings in array columns and orders by distan
 | --- | --- | --- | --- |
 | ✅ 🧪 | Vector literals | `vector_f32([1.0, 0.0])`, `vector_f64([1.0, 2.0])` | Render as ClickHouse array literals. |
 | ✅ 🧪 | Exact vector search | `query.order(l2_distance(embedding, vector_f32([...])).asc()).limit(10)` | Live test validates deterministic nearest-neighbor ordering. |
+| ✅ 🧪 | Cosine scoring helper | `cosine_similarity_f32_with_query_norm(embedding, named_param::<Array<Float>, _>("q", vec), query_norm)` | Renders array primitives for cosine similarity, keeps the query vector Diesel-owned, and lets callers compute/reuse the query norm in Rust. |
 | ✅ | Approximate vector index DDL | `.index(vector_similarity_index("idx", "embedding", 1536)` `.distance(VectorDistanceFunction::CosineDistance)` | Render-tested; live fixture keeps exact search portable across server builds. |
 | ✅ 🧪 | `ALTER TABLE ... ADD/MATERIALIZE INDEX` | `alter_table("items").add_index(...)`, `.materialize_index("idx")` | Generic index lifecycle helpers work with vector indexes; live test uses a portable minmax index. |
 | ✅ | Binary reference-vector parameter helpers | `vector_f32_binary(sql("$v"))` `vector_f32_hex(sql("?"))` `vector_f32_le_hex([...])` | Render/client-specific. ClickHouse docs recommend true binary client parameters; the async connection's HTTP parameter path is textual, so async vector query values should use `Array(Float32)` binds/named parameters or a hex/client-specific binary path. |

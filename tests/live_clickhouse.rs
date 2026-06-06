@@ -29,26 +29,27 @@ use diesel_clickhouse::{
     Setting, TableEngine, TableIndex, abs, accurate_cast_or_null, aggregate,
     aggregating_merge_tree, alias_ref, alter_table, analysis_of_variance, approx_top_sum,
     array_count, array_exists, array_exists2, array_filter, array_map, base64_decode,
-    base64_encode, cast, ceil, city_hash64, concat, corr, count, count_if, count_merge, covar_pop,
-    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table,
-    cut_query_string, date_diff, dense_rank, domain, domain_without_www, expr_as,
-    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
-    greatest, group_by_all, grouping_sets, hex, histogram, ilike, ipv4_num_to_string,
-    ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_null, is_valid_json,
-    join_column, json_extract_int, json_extract_int_path, json_extract_string_path, json_has,
-    json_length, json_value, l2_distance, lag_in_frame, lambda, lambda2, least, left_utf8, length,
-    length_utf8, lower, mann_whitney_u_test, map_apply, map_contains, map_filter, max_if,
-    merge_tree, min_if, multi_match_any, multi_match_any_index, mutation_assignment, named_param,
-    null_if, partition_by, partition_expr, position, position_case_insensitive, prewhere,
-    projection, quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles,
-    quantiles_timing, rank, regexp_match, replace_all, replacing_merge_tree, rollup, round,
-    row_number, sample_offset, simple_json_extract_int, simple_json_extract_string,
-    simple_json_has, sip_hash64, source_column, stddev_pop, stddev_pop_stable, stddev_samp,
-    substring, sum_merge, sum_state, summing_merge_tree, to_date_time, to_float64,
-    to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4, to_ipv6, to_sql, to_string,
-    to_uint64, to_uint64_or_null, top_k, top_level_domain, try_base64_decode, unhex, uniq_exact_if,
-    uniq_exact_merge, upper, url_fragment, url_path, url_path_full, url_protocol, url_query_string,
-    var_pop, var_pop_stable, vector_dot_product_f32, vector_f32, with_fill, xx_hash64,
+    base64_encode, cast, ceil, city_hash64, concat, corr, cosine_similarity_f32_with_query_norm,
+    count, count_if, count_merge, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cut_query_string, date_diff, dense_rank, domain,
+    domain_without_www, expr_as, farm_fingerprint64, final_table, finalize_aggregation,
+    first_significant_subdomain, floor, greatest, group_by_all, grouping_sets, hex, histogram,
+    ilike, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, is_null, is_valid_json, join_column, json_extract_int, json_extract_int_path,
+    json_extract_string_path, json_has, json_length, json_value, l2_distance, lag_in_frame, lambda,
+    lambda2, least, left_utf8, length, length_utf8, lower, mann_whitney_u_test, map_apply,
+    map_contains, map_filter, max_if, merge_tree, min_if, multi_match_any, multi_match_any_index,
+    mutation_assignment, named_param, null_if, partition_by, partition_expr, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample_offset, simple_json_extract_int,
+    simple_json_extract_string, simple_json_has, sip_hash64, source_column, stddev_pop,
+    stddev_pop_stable, stddev_samp, substring, sum_merge, sum_state, summing_merge_tree,
+    to_date_time, to_float64, to_float64_or_null, to_int32, to_int32_or_null, to_int64, to_ipv4,
+    to_ipv6, to_sql, to_string, to_uint64, to_uint64_or_null, top_k, top_level_domain,
+    try_base64_decode, unhex, uniq_exact_if, uniq_exact_merge, upper, url_fragment, url_path,
+    url_path_full, url_protocol, url_query_string, var_pop, var_pop_stable, vector_dot_product_f32,
+    vector_f32, with_fill, xx_hash64,
 };
 
 type TestResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -908,6 +909,57 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
             .load(&mut conn)
             .await?;
         assert_eq!(named_vector_scores, vec![(1, 1.0), (4, 0.9)]);
+
+        let raw_array_bind_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                expr_as(
+                    diesel::dsl::sql::<diesel::sql_types::Float>(
+                        "arraySum(arrayMap((x, y) -> x * y, embedding, ",
+                    )
+                    .bind::<Float32Array, _>(diesel_clickhouse::bind::<Float32Array, _>(vec![
+                        1.0_f32, 0.0_f32,
+                    ]))
+                    .sql("))"),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(raw_array_bind_scores, vec![(1, 1.0), (4, 0.9), (2, 0.2)]);
+
+        let cosine_query_vector =
+            named_param::<Float32Array, _>("cosine_q", vec![1.0_f32, 0.0_f32]);
+        let cosine_scores: Vec<(u32, f32)> = gold_documents::table
+            .filter(gold_documents::tenant_id.eq("acme"))
+            .select((
+                gold_documents::id,
+                expr_as(
+                    cosine_similarity_f32_with_query_norm(
+                        gold_documents::embedding,
+                        cosine_query_vector,
+                        1.0_f32,
+                    ),
+                    "score",
+                ),
+            ))
+            .order(alias_ref::<diesel::sql_types::Float>("score").desc())
+            .then_order_by(gold_documents::id.asc())
+            .load(&mut conn)
+            .await?;
+        assert_eq!(
+            cosine_scores
+                .iter()
+                .map(|(row_id, _)| *row_id)
+                .collect::<Vec<_>>(),
+            vec![1, 4, 2]
+        );
+        assert!((cosine_scores[0].1 - 1.0).abs() < 0.0001);
+        assert!((cosine_scores[1].1 - 0.9938837).abs() < 0.0001);
+        assert!((cosine_scores[2].1 - 0.2425356).abs() < 0.0001);
 
         let conflicting_named_parameter = diesel::select((
             named_param::<diesel_clickhouse::sql_types::UInt64, _>("same", 1_u64),

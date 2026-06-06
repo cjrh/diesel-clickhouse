@@ -127,7 +127,7 @@ let rows = documents::table
 For ClickHouse array parameters, use this crate's typed `bind` wrapper so the vector is collected by Diesel and serialized by `diesel-clickhouse`:
 
 ```rust,ignore
-use diesel::sql_types::Text;
+use diesel::sql_types::{Float, Text};
 use diesel_clickhouse::{array_exists2, bind, has, lambda2};
 use diesel_clickhouse::sql_types::{Array, UInt64};
 
@@ -152,6 +152,19 @@ let allowed_pair = array_exists2(
 );
 ```
 
+When the array value must sit inside a raw SQL literal's `.bind::<Array<_>, _>(...)`, wrap the vector with `diesel_clickhouse::bind` as well:
+
+```rust,ignore
+use diesel::dsl::sql;
+
+type QueryVector = Array<Float>;
+let score = sql::<Float>("arraySum(arrayMap((x, y) -> x * y, embedding, ")
+    .bind::<QueryVector, _>(bind::<QueryVector, _>(query_embedding))
+    .sql("))");
+```
+
+The nested `bind` is intentional: `Vec<T>` is serializable as a ClickHouse `Array(T)`, but Diesel's raw SQL literal binder requires an expression value. `diesel_clickhouse::bind::<Array<_>, _>(vec)` supplies that expression wrapper. Use typed helpers such as `has(bind::<Array<_>, _>(...), column)` when the array is a normal function argument.
+
 `lambda(...)` / `lambda2(...)` validate only the lambda parameter names and arity. The lambda body is an explicit ClickHouse SQL fragment, so keep it short and local just like other `sql::<T>(...)` escape hatches.
 
 When SQL text stability or repeated references matter, use `named_param::<ST, _>("name", value)`. It renders `{name:Type}` and binds `param_name` through the async connection exactly once, even when the expression is cloned and used multiple times:
@@ -167,7 +180,36 @@ let strong_match = vector_dot_product_f32(documents::embedding, q).gt(0.5_f32);
 
 Prefer `when(enabled, predicate)` for optional filters when stable SQL text is not required: disabled branches render `1` and contribute no bind values, so later binds such as `LIMIT ?` keep their intended positions.
 
-Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, `if_`, `array_exists2` for two parallel arrays, and `vector_dot_product_f32` for `Array(Float32)` scoring. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier. For async vector query values, prefer `Array(Float32)` binds (or named `Array(Float32)` parameters) as shown here; the binary-vector helpers are render/client-specific unless you provide a binary-safe client binding path.
+Common ClickHouse functions that previously required raw fragments have typed helpers: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, `to_float32`, `if_`, `array_exists2` for two parallel arrays, `vector_dot_product_f32`, and `cosine_similarity_f32_with_query_norm` for `Array(Float32)` scoring. For ordering by a computed alias, prefer `alias_ref::<ST>("score").desc()` over `sql::<ST>("score").desc()`; the helper validates and quotes the alias identifier. For async vector query values, prefer `Array(Float32)` binds (or named `Array(Float32)` parameters) as shown here; the binary-vector helpers are render/client-specific unless you provide a binary-safe client binding path.
+
+For cosine scoring, compute the query norm in Rust and keep the vector itself Diesel-owned:
+
+```rust,ignore
+use diesel::sql_types::Float;
+use diesel_clickhouse::{
+    alias_ref, cosine_similarity_f32_with_query_norm, expr_as, named_param,
+};
+use diesel_clickhouse::sql_types::Array;
+
+type Float32Array = Array<Float>;
+let query_norm = query_embedding.iter().map(|v| v * v).sum::<f32>().sqrt();
+let query_vector = named_param::<Float32Array, _>("q", query_embedding);
+let rows: Vec<(u64, f32)> = documents::table
+    .select((
+        documents::id,
+        expr_as(
+            cosine_similarity_f32_with_query_norm(
+                documents::embedding,
+                query_vector,
+                query_norm,
+            ),
+            "score",
+        ),
+    ))
+    .order(alias_ref::<Float>("score").desc())
+    .load(&mut conn)
+    .await?;
+```
 
 ### Loading structs and wide rows
 
@@ -347,6 +389,14 @@ diesel::table! {
 
 Diesel checks the Rust query shape against this schema at compile time. This is Diesel's normal schema-driven checking, not SQLx-style live database validation during compilation.
 
+Multi-table ClickHouse queries use Diesel's normal cross-table rule: every pair of tables that can appear together in one query must be listed in `allow_tables_to_appear_in_same_query!(...)`. Add this next to your ClickHouse `table!` declarations, just as you would for other Diesel backends:
+
+```rust,ignore
+diesel::allow_tables_to_appear_in_same_query!(events, tenants, documents);
+```
+
+If it is missing, complex joins can fail with a long `AppearsInFromClause` / `allow_tables_to_appear_in_same_query!` trait error even though the ClickHouse SQL itself would be valid.
+
 ## DDL
 
 ClickHouse DDL is available through explicit builders:
@@ -372,7 +422,7 @@ let sql = diesel_clickhouse::to_sql(&ddl)?;
 
 ## Joins
 
-Use `clickhouse_join(...)` for executable ClickHouse join SQL, especially for ClickHouse-specific grammar (`GLOBAL`, `ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`). Wrap projected columns with `source_column(...)` (or the backwards-compatible `join_column(...)` name) so the select list is type-checked instead of a hand-written string:
+Use `clickhouse_join(...)` for executable ClickHouse join SQL, especially for ClickHouse-specific grammar (`GLOBAL`, `ANY`/`ALL`/`ASOF`, `SEMI`/`ANTI`). As with ordinary Diesel joins, make sure the participating tables are listed in `allow_tables_to_appear_in_same_query!(...)`. Wrap projected columns with `source_column(...)` (or the backwards-compatible `join_column(...)` name) so the select list is type-checked instead of a hand-written string:
 
 ```rust,ignore
 use diesel_clickhouse::{source_column, ClickHouseJoinDsl};
@@ -454,6 +504,16 @@ assert_eq!(rendered.named_parameter_details()[0].type_name, "Array(String)");
 ```
 
 This helper is useful when rendering a Diesel AST with `to_sql` and then executing it through `diesel_clickhouse::clickhouse::Client`: tests can assert that every rendered positional placeholder has a matching `.bind(...)` call with the expected ClickHouse type, and every ClickHouse HTTP parameter (`{name:Type}`) has a matching `.param(...)` call. It is still a verification aid, not bind ownership; only `AsyncClickHouseConnection` carries the Diesel-collected values into execution.
+
+## Migration checklist for downstream crates
+
+1. Depend on the release that contains `AsyncClickHouseConnection` and add `diesel-async` if query sites will call `.load(...)`, `.first(...)`, or `.execute(...)` directly.
+2. Keep ClickHouse `table!` declarations together with an `allow_tables_to_appear_in_same_query!(...)` list for tables that participate in joins.
+3. Replace `to_sql(&query)` plus external `.bind(...)` / `.param(...)` with ordinary `.load(&mut conn).await?` for Diesel `Queryable` rows, or `conn.load_clickhouse_rows(query).await?` while migrating existing `#[derive(clickhouse::Row)]` structs.
+4. Keep direct `clickhouse::Client` usage for bootstrap/DDL or exceptional external-client paths; use `to_sql_with_metadata` there as a verification aid.
+5. Move raw `?` values inside Diesel raw literals with `.bind::<ST, _>(...)`, or replace the raw fragment with typed helpers when one exists.
+6. Replace raw `{name:Type}` plus external `.param(...)` with `named_param(...)` for reusable values, or typed `bind::<Array<_>, _>(...)` array expressions for ordinary array arguments.
+7. Keep high-volume writes on `insert_batch` / `insert_batch_with_options` or direct ClickHouse inserters rather than Diesel multi-row `INSERT`.
 
 ## Render-only and client-dependent areas
 

@@ -8,27 +8,28 @@ use diesel_clickhouse::{
     approx_top_sum_with_reserved, array_all, array_count, array_exists, array_exists2,
     array_filter, array_map, avg_merge, avg_merge_state, avg_state, base64_decode, base64_encode,
     buffer, cast, ceil, ch_param, city_hash64, collapsing_merge_tree, concat, corr,
-    cosine_distance, count, count_if, count_merge, count_merge_state, count_state, covar_pop,
-    covar_pop_stable, covar_samp, covar_samp_stable, create_materialized_view, create_table, cube,
-    cut_query_string, date_diff, dense_rank, distributed, domain, domain_without_www, expr_as,
-    farm_fingerprint64, final_table, finalize_aggregation, first_significant_subdomain, floor,
-    greatest, group_array_merge, group_array_state, group_by_all, grouping, grouping_sets, hex,
-    histogram, if_, ilike, ilike_escape, ipv4_num_to_string, ipv4_string_to_num,
-    ipv6_num_to_string, is_ipv4_string, is_ipv6_string, is_valid_json, join_column, json_exists,
-    json_extract_int, json_extract_int_ci, json_extract_int_ci_path, json_extract_int_path,
-    json_extract_raw_ci, json_extract_raw_path, json_extract_string_ci, json_extract_string_path,
-    json_has, json_length, json_query, json_value, l1_distance, l1_norm, l2_distance, l2_norm,
-    lag_in_frame, lambda, lambda2, least, left_utf8, length, length_utf8, like, like_escape,
-    linf_distance, linf_norm, lower, mann_whitney_u_test, map_apply, map_contains, map_filter,
-    map_from_arrays, map_keys, map_values, max_merge, max_state, min_merge, min_state,
-    multi_fuzzy_match_all_indices, multi_fuzzy_match_any, multi_fuzzy_match_any_index,
-    multi_match_all_indices, multi_match_any, multi_match_any_index, mutation_assignment,
-    named_param, not_ilike, not_ilike_escape, not_like, not_like_escape, null_if, partition_by,
-    partition_expr, partition_id, position, position_case_insensitive, prewhere, projection,
-    quantile, quantile_deterministic, quantile_exact, quantile_timing, quantiles, quantiles_timing,
-    rank, regexp_match, replace_all, replacing_merge_tree, rollup, round, row_number, sample,
-    sample_offset, simple_json_extract_int, simple_json_extract_string, simple_json_has,
-    sip_hash64, source_column, source_column_as, stddev_pop, stddev_pop_stable, stddev_samp,
+    cosine_distance, cosine_similarity_f32_with_query_norm, count, count_if, count_merge,
+    count_merge_state, count_state, covar_pop, covar_pop_stable, covar_samp, covar_samp_stable,
+    create_materialized_view, create_table, cube, cut_query_string, date_diff, dense_rank,
+    distributed, domain, domain_without_www, expr_as, farm_fingerprint64, final_table,
+    finalize_aggregation, first_significant_subdomain, floor, greatest, group_array_merge,
+    group_array_state, group_by_all, grouping, grouping_sets, hex, histogram, if_, ilike,
+    ilike_escape, ipv4_num_to_string, ipv4_string_to_num, ipv6_num_to_string, is_ipv4_string,
+    is_ipv6_string, is_valid_json, join_column, json_exists, json_extract_int, json_extract_int_ci,
+    json_extract_int_ci_path, json_extract_int_path, json_extract_raw_ci, json_extract_raw_path,
+    json_extract_string_ci, json_extract_string_path, json_has, json_length, json_query,
+    json_value, l1_distance, l1_norm, l2_distance, l2_norm, lag_in_frame, lambda, lambda2, least,
+    left_utf8, length, length_utf8, like, like_escape, linf_distance, linf_norm, lower,
+    mann_whitney_u_test, map_apply, map_contains, map_filter, map_from_arrays, map_keys,
+    map_values, max_merge, max_state, min_merge, min_state, multi_fuzzy_match_all_indices,
+    multi_fuzzy_match_any, multi_fuzzy_match_any_index, multi_match_all_indices, multi_match_any,
+    multi_match_any_index, mutation_assignment, named_param, not_ilike, not_ilike_escape, not_like,
+    not_like_escape, null_if, partition_by, partition_expr, partition_id, position,
+    position_case_insensitive, prewhere, projection, quantile, quantile_deterministic,
+    quantile_exact, quantile_timing, quantiles, quantiles_timing, rank, regexp_match, replace_all,
+    replacing_merge_tree, rollup, round, row_number, sample, sample_offset,
+    simple_json_extract_int, simple_json_extract_string, simple_json_has, sip_hash64,
+    source_column, source_column_as, stddev_pop, stddev_pop_stable, stddev_samp,
     stddev_samp_stable, substring, sum_merge, sum_merge_state, sum_state, summing_merge_tree_with,
     to_bool, to_date_time, to_float32, to_float64, to_float64_or_null, to_int32, to_int32_or_null,
     to_int64, to_int64_or_zero, to_int128, to_ipv4, to_ipv6, to_sql, to_sql_with_metadata,
@@ -788,6 +789,23 @@ fn renders_vector_search_helpers_and_index_ddl() {
         embedding,
         vector_f32([1.0, 0.0, 0.0]),
     ));
+    let cosine_similarity_query = image_vectors.select(cosine_similarity_f32_with_query_norm(
+        embedding,
+        vector_f32([1.0, 0.0, 0.0]),
+        1.0_f32,
+    ));
+    let raw_array_bind_query = image_vectors.select(
+        diesel::dsl::sql::<diesel::sql_types::Float>(
+            "arraySum(arrayMap((x, y) -> x * y, embedding, ",
+        )
+        .bind::<diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>, _>(
+            diesel_clickhouse::bind::<
+                diesel_clickhouse::sql_types::Array<diesel::sql_types::Float>,
+                _,
+            >(vec![1.0_f32, 0.0_f32]),
+        )
+        .sql("))"),
+    );
     let binary_query = image_vectors.select((
         l2_distance(
             embedding,
@@ -826,6 +844,14 @@ fn renders_vector_search_helpers_and_index_ddl() {
     assert_eq!(
         to_sql(&dot_product_query).unwrap(),
         "SELECT toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, [1, 0, 0]))) FROM `image_vectors`"
+    );
+    assert_eq!(
+        to_sql(&cosine_similarity_query).unwrap(),
+        "SELECT toFloat32(if(? = 0 OR sqrt(arraySum(arrayMap(x -> x * x, `image_vectors`.`embedding`))) = 0, 0, toFloat32(arraySum(arrayMap((x, y) -> x * y, `image_vectors`.`embedding`, [1, 0, 0]))) / (sqrt(arraySum(arrayMap(x -> x * x, `image_vectors`.`embedding`))) * ?))) FROM `image_vectors`"
+    );
+    assert_eq!(
+        to_sql(&raw_array_bind_query).unwrap(),
+        "SELECT arraySum(arrayMap((x, y) -> x * y, embedding, ?)) FROM `image_vectors`"
     );
     assert_eq!(
         to_sql(&binary_query).unwrap(),

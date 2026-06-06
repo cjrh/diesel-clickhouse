@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-05
+
 ### Added
 - Async connection support for Diesel-owned array binds in the Carson-critical shapes: `Vec<u64>`/`Array(UInt64)`, `Vec<String>`/`Array(String)`, and `Vec<f32>`/`Array(Float32)`, covered by live ClickHouse tests for membership filters, parallel-array `arrayExists`, and vector scoring.
 - Targeted ClickHouse helpers for common Carson raw SQL patterns: `position_case_insensitive`, `length_utf8`, `left_utf8`, `null_if`, and typed `alias_ref::<ST>(...)` for validated `ORDER BY`/`GROUP BY` alias references.
@@ -18,6 +20,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 - Richer `to_sql_with_metadata` output: positional bind ClickHouse types plus named HTTP parameter type/occurrence summaries.
 - Cookbook/usage bootstrap recipe for creating a database with the direct `clickhouse` client before constructing a database-scoped `AsyncClickHouseConnection`.
 - `vector_dot_product_f32(left, right)` for Diesel-owned `Array(Float32)` vector scoring without hand-assembling `arrayMap`/`arraySum` SQL.
+- `cosine_similarity_f32_with_query_norm(left, right, query_norm)` for Diesel-owned `Array(Float32)` cosine scoring with a caller-computed query norm.
 - `AsyncClickHouseConnection::load_clickhouse_rows(...)`, a migration bridge that keeps Diesel-owned binds while decoding results into existing `#[derive(clickhouse::Row, serde::Deserialize)]` structs via RowBinary.
 - `named_param::<ST, _>("name", value)` / `ch_param(...)` for reusable ClickHouse `{name:Type}` HTTP parameters bound through Diesel and de-duplicated during async execution.
 
@@ -28,8 +31,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 - Reserved the async connection's internal HTTP-parameter prefix so generated positional-bind parameters cannot collide with user-visible `named_param(...)` or raw `{name:Type}` parameters.
 
 ### Documentation
-- Clarified async bind ownership, array bind usage, `with_client(...)`, pooling trade-offs, and connection-level settings versus SQL `SETTINGS` in the usage/design docs and feature matrix.
-- Added live-generated cookbook recipes for migrating from `to_sql` + external binds, raw SQL literal binds, async array parameters, vector scoring, and named struct result mapping.
+- Clarified async bind ownership, array bind usage, `with_client(...)`, pooling trade-offs, connection-level settings versus SQL `SETTINGS`, Diesel `allow_tables_to_appear_in_same_query!(...)`, and downstream migration steps in the usage/design docs and feature matrix.
+- Added live-generated cookbook recipes for migrating from `to_sql` + external binds, repeated named search parameters, async array parameters, vector scoring, cosine similarity, and named struct result mapping.
 
 ## [0.9.0] — 2026-06-04
 
@@ -126,7 +129,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.9.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.10.0...HEAD
+[0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.9.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.9.0
 [0.8.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.8.0
 [0.7.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.7.0
