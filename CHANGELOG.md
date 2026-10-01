@@ -10,6 +10,10 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Added
+- `in_list(column, values)`: `column IN (values)` as one `Array` bind, rendered `has(?, column)`. Use it where `eq_any` does not compile. `eq_any` works only for Diesel's own types (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `&str`). It fails for `UInt*`/`Int128`-style ClickHouse types (`u64: AsExpression<UInt64>` is not satisfied) and for `bind(..)` elements, because of Diesel's coherence rules. See the `bind` module docs and the cookbook.
+- `Array<Uuid>` binds accept `Vec<String>` / `Vec<&str>` (canonical UUID text), like the scalar `Uuid` bind.
+
 ### Fixed
 - Large binds no longer fail client-side with `invalid params: uri too long`. Server-side `param_*` values travel in the request URI, which the `http` crate caps at 64 KB. Each query now has a URI budget (default 32 KiB, `DEFAULT_MAX_PARAM_URI_BYTES`). Past it, binds move to the request body: `String` as a quoted literal, and arrays, numbers, decimals, dates and UUIDs as `CAST('<escaped text>' AS <declared type>)`. The server parses the same text the URI would carry, so values (including `UInt128`/`Int256`) and types are unchanged, and bad input is a parse error, never executed SQL. This covers one huge array bind and thousands of scalar binds (`eq_any`). Other types (`JSON`, `Map`, ...) stay parameters. Tune with `AsyncClickHouseConnection::with_max_param_uri_bytes` (`usize::MAX` restores the old behaviour). Named parameters are never inlined. Inlined values count against ClickHouse's `max_query_size` instead.
 

@@ -24,8 +24,9 @@ use diesel_async::{RunQueryDsl, SimpleAsyncConnection};
 use diesel_clickhouse::{
     ClickHouseConnectionOptions, ClickHouseJoinDsl, DataType, TableEngine, alias_ref,
     array_exists2, bind, clickhouse, cosine_similarity_f32_with_query_norm, count, count_if,
-    create_table, expr_as, final_table, has, if_, lambda2, named_param, position_case_insensitive,
-    source_column, to_float32, to_sql, to_sql_with_metadata, vector_dot_product_f32, when,
+    create_table, expr_as, final_table, has, if_, in_list, lambda2, named_param,
+    position_case_insensitive, source_column, to_float32, to_sql, to_sql_with_metadata,
+    vector_dot_product_f32, when,
 };
 
 type Result<T> = std::result::Result<T, Box<dyn Error + Send + Sync>>;
@@ -261,6 +262,37 @@ async fn main() -> Result<()> {
         &events::table
             .filter(events::id.gt(bind(after)))
             .filter(events::id.le(bind(through)))
+            .select((events::id, events::tenant_id))
+            .order(events::id.asc()),
+    )?);
+    doc.shared_output(&parity(&orm, &raw));
+
+    // ----- Recipe: in_list() instead of eq_any ------------------------------
+    doc.recipe(
+        "`IN` lists with `in_list(...)`",
+        "`column.eq_any(values)` is Diesel's `IN (...)`, but it needs \
+         `Vec<T>: AsExpression<column::SqlType>`. That holds for Diesel's own \
+         types (`i32`, `i64`, `f64`, `bool`, `String`) and fails to compile for \
+         ClickHouse-only ones: `eq_any(vec_of_u64)` on a `UInt64` column reports \
+         `u64: AsExpression<UInt64>` is not satisfied. `in_list(column, values)` \
+         sends the whole list as one `Array` bind and renders `has(?, column)`, so \
+         it works for those types, and a very long list stays one parameter. Past \
+         the connection's URI budget the array moves to the request body, so it \
+         does not hit `uri too long`. An empty list matches nothing.",
+    );
+    doc.sql(R_IN_LIST_SQL);
+    doc.diesel(R_IN_LIST_RUST);
+    let wanted: Vec<u64> = vec![1, 3, 5];
+    let orm: Vec<(u64, String)> = events::table
+        .filter(in_list(events::id, wanted.clone()))
+        .select((events::id, events::tenant_id))
+        .order(events::id.asc())
+        .load(&mut conn)
+        .await?;
+    let raw: Vec<(u64, String)> = client.query(R_IN_LIST_SQL).fetch_all().await?;
+    doc.rendered(&to_sql(
+        &events::table
+            .filter(in_list(events::id, wanted))
             .select((events::id, events::tenant_id))
             .order(events::id.asc()),
     )?);
@@ -1169,6 +1201,19 @@ let rows: Vec<(u64, String)> = events::table
     // `events::id` is a `UInt64`; `bind` types each value against it.
     .filter(events::id.gt(bind(after)))
     .filter(events::id.le(bind(through)))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;"#;
+
+const R_IN_LIST_SQL: &str =
+    "SELECT id, tenant_id FROM cookbook_events WHERE id IN (1, 3, 5) ORDER BY id";
+
+const R_IN_LIST_RUST: &str = r#"use diesel_clickhouse::in_list;
+
+// `events::id.eq_any(ids)` does not compile for a `UInt64` column.
+let ids: Vec<u64> = vec![1, 3, 5];
+let rows: Vec<(u64, String)> = events::table
+    .filter(in_list(events::id, ids))
     .select((events::id, events::tenant_id))
     .order(events::id.asc())
     .load(&mut conn).await?;"#;

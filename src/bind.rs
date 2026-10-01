@@ -30,6 +30,32 @@
 //! events::id.gt(bind(after_id))
 //! ```
 //!
+//! ## `IN` lists: `in_list`
+//!
+//! `column.eq_any(vec)` is Diesel's `IN (?, ?, ...)`. It needs
+//! `Vec<T>: AsExpression<column::SqlType>` for the element type, so it works
+//! for the types Diesel itself covers (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`,
+//! `String`, `&str`) and **does not compile** for the ClickHouse-only types
+//! (`Vec<u64>` against a `UInt64` column), for `Uuid`, or for [`bind`] elements
+//! (`Many<ST, I>` needs `I: ToSql<ST>`, which a `BoundValue` is not). The error
+//! reads `u64: AsExpression<UInt64>` is not satisfied.
+//!
+//! Use [`in_list`] instead. It sends the whole list as one `Array` bind and
+//! renders `has(?, column)`, so it works for every element type that has an
+//! array `ToSql`, and a huge list is one parameter, not thousands:
+//!
+//! ```ignore
+//! use diesel_clickhouse::in_list;
+//!
+//! // IN (...) over a UInt64 column; `eq_any(ids)` would not compile.
+//! events::table.filter(in_list(events::id, ids))
+//! ```
+//!
+//! Past the connection's URI budget (see
+//! [`AsyncClickHouseConnection::with_max_param_uri_bytes`](crate::AsyncClickHouseConnection::with_max_param_uri_bytes))
+//! the array moves to the request body, so list size no longer hits "uri too
+//! long". The remaining limit is ClickHouse's own `max_query_size`.
+//!
 //! The target SQL type is normally inferred from the surrounding expression
 //! (the column being compared), so a turbofish is rarely needed. When binding in
 //! a position with no inferable type, name it explicitly: `bind::<UInt64, _>(x)`.
@@ -44,7 +70,10 @@ use diesel::expression::{
 use diesel::query_builder::{AstPass, QueryFragment, QueryId};
 use diesel::result::QueryResult;
 use diesel::serialize::ToSql;
-use diesel::sql_types::{HasSqlType, SqlType};
+use diesel::sql_types::{Bool, HasSqlType, SqlType};
+
+use crate::backend::ClickHouse;
+use crate::types::Array;
 
 /// A Rust value rendered as a bound parameter typed as the ClickHouse SQL type
 /// `ST`.
@@ -67,6 +96,8 @@ pub struct BoundValue<ST, T> {
 /// ```ignore
 /// silver_aspects::silver_aspect_id.gt(bind(after_id))
 /// ```
+///
+/// For `IN` lists use [`in_list`]: `eq_any` does not accept these types.
 ///
 /// `ST` is inferred from the surrounding expression whenever possible (here,
 /// from the column's SQL type), so callers seldom write it. The value is sent
@@ -115,4 +146,98 @@ impl<ST, T, QS> SelectableExpression<QS> for BoundValue<ST, T> where
 
 impl<ST, T, GB> ValidGrouping<GB> for BoundValue<ST, T> {
     type IsAggregate = is_aggregate::Never;
+}
+
+/// `column IN (values...)` as a single array bind: renders `has(?, column)`.
+///
+/// Construct one with [`in_list`].
+#[derive(Debug, Clone)]
+pub struct InList<Col, T> {
+    column: Col,
+    values: Vec<T>,
+}
+
+/// Filter `column` to any of `values`, sent as one `Array` bind.
+///
+/// `column IN (values)`, rendered `has(?, column)`. An empty list matches
+/// nothing.
+///
+/// ```ignore
+/// use diesel_clickhouse::in_list;
+///
+/// events::table.filter(in_list(events::id, vec![1_u64, 2, 3]))
+/// ```
+///
+/// # Why not `eq_any`?
+///
+/// `column.eq_any(vec)` needs `Vec<T>: AsExpression<column::SqlType>`. That
+/// holds for the types Diesel itself covers (`i16`, `i32`, `i64`, `f32`,
+/// `f64`, `bool`, `String`, `&str`) and **does not compile** for
+/// ClickHouse-only types (`Vec<u64>` against a `UInt64` column, `UInt128`,
+/// `Uuid`, ...). The error reads ``u64: AsExpression<UInt64>` is not
+/// satisfied``. Diesel's coherence rules make that impl impossible to write
+/// (see [`bind`]). Wrapping each element in [`bind`] does not help either:
+/// `eq_any` needs `ToSql` elements, which a [`BoundValue`] is not.
+///
+/// `in_list` has no such limit: the element type comes from the column, and
+/// `Vec<T>` only has to serialize as `Array<column::SqlType>`. `Uuid` columns
+/// take `Vec<String>` / `Vec<&str>` (canonical UUID text).
+///
+/// # Large lists
+///
+/// The list is one parameter, not thousands. Past the connection's URI budget
+/// (see
+/// [`AsyncClickHouseConnection::with_max_param_uri_bytes`](crate::AsyncClickHouseConnection::with_max_param_uri_bytes))
+/// it moves to the request body, so size does not hit `uri too long`. The
+/// remaining limit is ClickHouse's own `max_query_size`.
+pub fn in_list<Col, T>(column: Col, values: Vec<T>) -> InList<Col, T>
+where
+    Col: Expression,
+{
+    InList { column, values }
+}
+
+impl<Col, T> Expression for InList<Col, T>
+where
+    Col: Expression,
+{
+    type SqlType = Bool;
+}
+
+impl<Col, T> QueryFragment<ClickHouse> for InList<Col, T>
+where
+    Col: Expression + QueryFragment<ClickHouse>,
+    Col::SqlType: SqlType,
+    ClickHouse: HasSqlType<Array<Col::SqlType>>,
+    Vec<T>: ToSql<Array<Col::SqlType>, ClickHouse>,
+{
+    fn walk_ast<'b>(&'b self, mut pass: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
+        pass.push_sql("has(");
+        pass.push_bind_param::<Array<Col::SqlType>, _>(&self.values)?;
+        pass.push_sql(", ");
+        self.column.walk_ast(pass.reborrow())?;
+        pass.push_sql(")");
+        Ok(())
+    }
+}
+
+impl<Col: QueryId, T> QueryId for InList<Col, T> {
+    type QueryId = ();
+    const HAS_STATIC_QUERY_ID: bool = false;
+}
+
+impl<Col, T, QS> AppearsOnTable<QS> for InList<Col, T>
+where
+    Col: AppearsOnTable<QS>,
+    Self: Expression,
+{
+}
+
+impl<Col, T, QS> SelectableExpression<QS> for InList<Col, T> where Self: AppearsOnTable<QS> {}
+
+impl<Col, T, GB> ValidGrouping<GB> for InList<Col, T>
+where
+    Col: ValidGrouping<GB>,
+{
+    type IsAggregate = Col::IsAggregate;
 }

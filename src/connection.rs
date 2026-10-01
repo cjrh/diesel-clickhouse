@@ -277,8 +277,11 @@ impl AsyncClickHouseConnection {
     /// array bind no longer fails with "uri too long". Strings become quoted
     /// literals; numbers, decimals, dates, UUIDs and arrays become
     /// `CAST('<text>' AS <type>)`, so value and type are unchanged.
+    ///
+    /// For long `IN` lists use `eq_any` where it compiles (Diesel's own types),
+    /// or [`in_list`](crate::in_list) for ClickHouse-only types such as `UInt64`.
     /// Inlined values count against ClickHouse's `max_query_size`, not the URI.
-    /// Defaults to [`DEFAULT_MAX_PARAM_URI_BYTES`]; `0` inlines every eligible
+    /// Defaults to 32 KiB (`DEFAULT_MAX_PARAM_URI_BYTES`); `0` inlines every eligible
     /// bind, and `usize::MAX` restores always-parameterize behavior.
     /// Named parameters ([`named_param`](crate::named_param)) are never inlined.
     pub fn with_max_param_uri_bytes(mut self, bytes: usize) -> Self {

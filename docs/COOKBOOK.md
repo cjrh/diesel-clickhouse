@@ -252,6 +252,56 @@ Both the ClickHouse SQL and the Diesel query above return the same rows:
 ```
 
 
+### `IN` lists with `in_list(...)`
+
+`column.eq_any(values)` is Diesel's `IN (...)`, but it needs `Vec<T>: AsExpression<column::SqlType>`. That holds for Diesel's own types (`i32`, `i64`, `f64`, `bool`, `String`) and fails to compile for ClickHouse-only ones: `eq_any(vec_of_u64)` on a `UInt64` column reports `u64: AsExpression<UInt64>` is not satisfied. `in_list(column, values)` sends the whole list as one `Array` bind and renders `has(?, column)`, so it works for those types, and a very long list stays one parameter. Past the connection's URI budget the array moves to the request body, so it does not hit `uri too long`. An empty list matches nothing.
+
+ClickHouse SQL:
+
+```sql
+SELECT id, tenant_id FROM cookbook_events WHERE id IN (1, 3, 5) ORDER BY id
+```
+
+Diesel:
+
+```rust,ignore
+use diesel_clickhouse::in_list;
+
+// `events::id.eq_any(ids)` does not compile for a `UInt64` column.
+let ids: Vec<u64> = vec![1, 3, 5];
+let rows: Vec<(u64, String)> = events::table
+    .filter(in_list(events::id, ids))
+    .select((events::id, events::tenant_id))
+    .order(events::id.asc())
+    .load(&mut conn).await?;
+```
+
+Rendered by `diesel-clickhouse`:
+
+```sql
+SELECT `cookbook_events`.`id`, `cookbook_events`.`tenant_id` FROM `cookbook_events` WHERE has(?, `cookbook_events`.`id`) ORDER BY `cookbook_events`.`id` ASC
+```
+
+Both the ClickHouse SQL and the Diesel query above return the same rows:
+
+```text
+[
+    (
+        1,
+        "acme",
+    ),
+    (
+        3,
+        "acme",
+    ),
+    (
+        5,
+        "beta",
+    ),
+]
+```
+
+
 ### Optional filters with `when(...)`
 
 On most backends an optional filter is added by boxing the query, but the ClickHouse backend does not support `.into_boxed()`. `when(enabled, predicate)` covers the gap: when `enabled` is true the predicate renders normally; when it is false the node renders the always-true constant `1`, so the filter contributes nothing and binds nothing. This replaces the `(? = '' OR col = ?)` sentinel trick — the value is referenced once and stays fully typed. (`when` renders different SQL per branch; if you need the SQL *text* to stay identical across calls — for ClickHouse's query cache or a parameterized view — see the named-parameter recipe next.)

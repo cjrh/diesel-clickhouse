@@ -2697,6 +2697,39 @@ async fn spilled_binds_match_parameterized_binds() -> TestResult<()> {
         assert!(hit);
     }
 
+    // `in_list` is `IN` for types where `eq_any` does not compile.
+    {
+        use diesel::dsl::sql;
+        use diesel_clickhouse::in_list;
+        use diesel_clickhouse::sql_types::Uuid;
+        let mut conn = spill_conn(&fixture, 32 * 1024);
+
+        let ids: Vec<u64> = (0..30_000).collect();
+        let hit: bool = diesel::select(in_list(sql::<UInt64>("toUInt64(29999)"), ids.clone()))
+            .get_result(&mut conn)
+            .await?;
+        assert!(hit);
+        let miss: bool = diesel::select(in_list(sql::<UInt64>("toUInt64(30000)"), ids))
+            .get_result(&mut conn)
+            .await?;
+        assert!(!miss);
+
+        let empty: bool = diesel::select(in_list(sql::<UInt64>("toUInt64(1)"), Vec::<u64>::new()))
+            .get_result(&mut conn)
+            .await?;
+        assert!(!empty);
+
+        let u = "00000000-0000-0000-0000-00000000000a";
+        let uuids = vec![
+            u.to_string(),
+            "00000000-0000-0000-0000-00000000000b".to_string(),
+        ];
+        let found: bool = diesel::select(in_list(sql::<Uuid>(&format!("toUUID('{u}')")), uuids))
+            .get_result(&mut conn)
+            .await?;
+        assert!(found);
+    }
+
     // A real 30k-id array runs at the default budget (the original bug).
     let mut conn = spill_conn(&fixture, 32 * 1024);
     let ids: Vec<u64> = (0..30_000).collect();

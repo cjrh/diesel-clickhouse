@@ -1735,6 +1735,22 @@ fn renders_bind_against_clickhouse_unsigned_columns() {
     );
 }
 
+// `in_list` is `IN (...)` for column types where `eq_any` does not compile
+// (`Vec<u64>` against a `UInt64` column). The whole list is one array bind.
+#[test]
+fn renders_in_list_as_one_array_bind() {
+    use diesel_clickhouse::in_list;
+
+    let query = counters::table
+        .filter(in_list(counters::id, vec![1_u64, 2, 3]))
+        .select(counters::id);
+
+    assert_eq!(
+        to_sql(&query).unwrap(),
+        "SELECT `counters`.`id` FROM `counters` WHERE has(?, `counters`.`id`)"
+    );
+}
+
 // `when(enabled, predicate)` renders the predicate when enabled and the
 // always-true constant `1` (binding nothing) when disabled, giving an optional
 // filter on a backend that does not support boxed queries.

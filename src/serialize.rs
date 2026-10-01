@@ -152,13 +152,34 @@ impl ArrayLiteralElement<Text> for str {
 
 impl ArrayLiteralElement<Text> for String {
     fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
-        self.as_str().write_element(out)
+        <str as ArrayLiteralElement<Text>>::write_element(self.as_str(), out)
     }
 }
 
 impl ArrayLiteralElement<Text> for &str {
     fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
-        (*self).write_element(out)
+        <str as ArrayLiteralElement<Text>>::write_element(self, out)
+    }
+}
+
+// UUIDs bind as their canonical text, like the scalar `Uuid` bind. Pass
+// `uuid.to_string()` for a `uuid::Uuid`.
+impl ArrayLiteralElement<Uuid> for str {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        push_quoted_string_literal(out, self);
+        Ok(())
+    }
+}
+
+impl ArrayLiteralElement<Uuid> for String {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        <str as ArrayLiteralElement<Uuid>>::write_element(self.as_str(), out)
+    }
+}
+
+impl ArrayLiteralElement<Uuid> for &str {
+    fn write_element(&self, out: &mut String) -> Result<(), Box<dyn Error + Send + Sync>> {
+        <str as ArrayLiteralElement<Uuid>>::write_element(self, out)
     }
 }
 

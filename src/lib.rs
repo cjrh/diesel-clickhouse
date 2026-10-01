@@ -100,7 +100,7 @@ pub use backend::{
     ClickHouse, ClickHouseQueryBuilder, ClickHouseTypeMetadata, NamedParameterMetadata,
     RenderedSql, RenderedSqlMetadata, analyze_rendered_sql, to_sql, to_sql_with_metadata,
 };
-pub use bind::{BoundValue, bind};
+pub use bind::{BoundValue, InList, bind, in_list};
 pub use cast::{
     CastFunction, accurate_cast, accurate_cast_or_default, accurate_cast_or_null, cast,
 };
