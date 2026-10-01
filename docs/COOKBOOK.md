@@ -254,7 +254,7 @@ Both the ClickHouse SQL and the Diesel query above return the same rows:
 
 ### `IN` lists with `in_list(...)`
 
-`column.eq_any(values)` is Diesel's `IN (...)`, but it needs `Vec<T>: AsExpression<column::SqlType>`. That holds for Diesel's own types (`i32`, `i64`, `f64`, `bool`, `String`) and fails to compile for ClickHouse-only ones: `eq_any(vec_of_u64)` on a `UInt64` column reports `u64: AsExpression<UInt64>` is not satisfied. `in_list(column, values)` sends the whole list as one `Array` bind and renders `has(?, column)`, so it works for those types, and a very long list stays one parameter. Past the connection's URI budget the array moves to the request body, so it does not hit `uri too long`. An empty list matches nothing.
+`column.eq_any(values)` is Diesel's `IN (...)`, but it needs `T: AsExpression<column::SqlType>` for the element type `T`. That holds for Diesel's own types (`i32`, `i64`, `f64`, `bool`, `String`) and fails to compile for ClickHouse-only ones: `eq_any(vec_of_u64)` on a `UInt64` column reports `u64: AsExpression<UInt64>` is not satisfied. `in_list(column, values)` sends the whole list as one `Array` bind and renders `has(?, column)`, so it works for those types, and a very long list stays one parameter. Past the connection's URI budget the array moves to the request body, so it does not hit `uri too long`. An empty list matches nothing. Nullable columns are rejected at compile time, because array binds do not carry element nullability.
 
 ClickHouse SQL:
 

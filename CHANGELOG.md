@@ -11,7 +11,7 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 ## [Unreleased]
 
 ### Added
-- `in_list(column, values)`: `column IN (values)` as one `Array` bind, rendered `has(?, column)`. Use it where `eq_any` does not compile. `eq_any` works only for Diesel's own types (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `&str`). It fails for `UInt*`/`Int128`-style ClickHouse types (`u64: AsExpression<UInt64>` is not satisfied) and for `bind(..)` elements, because of Diesel's coherence rules. See the `bind` module docs and the cookbook.
+- `in_list(column, values)`: `column IN (values)` as one `Array` bind, rendered `has(?, column)`. Use it where `eq_any` does not compile. `eq_any` works only for Diesel's own types (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `&str`). It fails for `UInt*`/`Int128`-style ClickHouse types (`u64: AsExpression<UInt64>` is not satisfied) and for `bind(..)` elements, because of Diesel's coherence rules. `Nullable<_>` columns are a compile error: array binds do not carry element nullability, so `None` would read as `0`. See the `in_list` docs and the cookbook.
 - `Array<Uuid>` binds accept `Vec<String>` / `Vec<&str>` (canonical UUID text), like the scalar `Uuid` bind.
 
 ### Fixed

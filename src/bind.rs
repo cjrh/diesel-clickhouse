@@ -33,7 +33,7 @@
 //! ## `IN` lists: `in_list`
 //!
 //! `column.eq_any(vec)` is Diesel's `IN (?, ?, ...)`. It needs
-//! `Vec<T>: AsExpression<column::SqlType>` for the element type, so it works
+//! `T: AsExpression<column::SqlType>` for the element type `T`, so it works
 //! for the types Diesel itself covers (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`,
 //! `String`, `&str`) and **does not compile** for the ClickHouse-only types
 //! (`Vec<u64>` against a `UInt64` column), for `Uuid`, or for [`bind`] elements
@@ -70,6 +70,7 @@ use diesel::expression::{
 use diesel::query_builder::{AstPass, QueryFragment, QueryId};
 use diesel::result::QueryResult;
 use diesel::serialize::ToSql;
+use diesel::sql_types::is_nullable;
 use diesel::sql_types::{Bool, HasSqlType, SqlType};
 
 use crate::backend::ClickHouse;
@@ -170,7 +171,8 @@ pub struct InList<Col, T> {
 ///
 /// # Why not `eq_any`?
 ///
-/// `column.eq_any(vec)` needs `Vec<T>: AsExpression<column::SqlType>`. That
+/// `column.eq_any(vec)` needs `T: AsExpression<column::SqlType>` for the element
+/// type `T`. That
 /// holds for the types Diesel itself covers (`i16`, `i32`, `i64`, `f32`,
 /// `f64`, `bool`, `String`, `&str`) and **does not compile** for
 /// ClickHouse-only types (`Vec<u64>` against a `UInt64` column, `UInt128`,
@@ -183,6 +185,13 @@ pub struct InList<Col, T> {
 /// `Vec<T>` only has to serialize as `Array<column::SqlType>`. `Uuid` columns
 /// take `Vec<String>` / `Vec<&str>` (canonical UUID text).
 ///
+/// # Nullable columns
+///
+/// Not supported: a `Nullable<_>` column is a compile error. Array binds do not
+/// carry element nullability, so `None` would be read as the default value
+/// (`0`, `''`) and match rows it should not. Pass a non-null column or
+/// expression, e.g. `assumeNotNull(column)` after an `IS NOT NULL` filter.
+///
 /// # Large lists
 ///
 /// The list is one parameter, not thousands. Past the connection's URI budget
@@ -193,6 +202,7 @@ pub struct InList<Col, T> {
 pub fn in_list<Col, T>(column: Col, values: Vec<T>) -> InList<Col, T>
 where
     Col: Expression,
+    Col::SqlType: SqlType<IsNull = is_nullable::NotNull>,
 {
     InList { column, values }
 }
