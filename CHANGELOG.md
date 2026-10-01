@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-10-01
+
 ### Added
 - `in_list(column, values)`: `column IN (values)` as one `Array` bind, rendered `has(?, column)`. Use it where `eq_any` does not compile. `eq_any` works only for Diesel's own types (`i16`, `i32`, `i64`, `f32`, `f64`, `bool`, `String`, `&str`). It fails for `UInt*`/`Int128`-style ClickHouse types (`u64: AsExpression<UInt64>` is not satisfied) and for `bind(..)` elements, because of Diesel's coherence rules. `Nullable<_>` columns are a compile error: array binds do not carry element nullability, so `None` would read as `0`. See the `in_list` docs and the cookbook.
 - `Array<Uuid>` binds accept `Vec<String>` / `Vec<&str>` (canonical UUID text), like the scalar `Uuid` bind.
@@ -138,7 +140,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.10.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.11.0...HEAD
+[0.11.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.11.0
 [0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.9.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.9.0
