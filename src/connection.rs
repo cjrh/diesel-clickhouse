@@ -1275,21 +1275,31 @@ fn push_bind_parameter_or_literal(
     let setting_name = format!("param_{parameter_name}");
     let cost = uri_pair_len(&setting_name, &parameter_value);
     if cost > budget.remaining {
-        // Out of URI budget: ship this value in the request body instead. An
-        // array literal has no element type of its own (`[1,2]` is
-        // `Array(UInt8)`), so cast it back to the declared parameter type.
-        if bind_metadata.name == "Array" {
-            result.push_str("CAST(");
-            push_bind_literal(result, bind_idx, metadata, binds)?;
-            result.push_str(" AS ");
-            result.push_str(&parameter_type);
-            result.push(')');
-        } else {
-            push_bind_literal(result, bind_idx, metadata, binds)?;
+        // Out of URI budget: ship this value in the request body instead, but
+        // only where that keeps both its exact value and its declared type.
+        match (bind_metadata.name, bind) {
+            // Same text the URI parameter would carry, parsed by the same
+            // server-side text reader. A bare `[...]` literal would not do:
+            // it infers a narrower element type and rounds wide integers.
+            ("Array", Some(bytes)) => {
+                result.push_str("CAST(");
+                push_string_literal(result, bytes)?;
+                result.push_str(" AS ");
+                result.push_str(&parameter_type);
+                result.push(')');
+                return Ok(());
+            }
+            // A quoted, escaped literal is already a `String`.
+            ("String", Some(_)) => {
+                push_bind_literal(result, bind_idx, metadata, binds)?;
+                return Ok(());
+            }
+            // Every other scalar stays a typed parameter: it is small, and a
+            // bare literal would lose its type or skip server validation.
+            _ => {}
         }
-        return Ok(());
     }
-    budget.remaining -= cost;
+    budget.remaining = budget.remaining.saturating_sub(cost);
 
     result.push('{');
     result.push_str(&parameter_name);
@@ -1836,41 +1846,61 @@ mod tests {
 
         assert_eq!(
             prepared.sql,
-            format!("SELECT has(CAST({literal} AS Array(UInt64)), toUInt64(2))")
+            format!("SELECT has(CAST('{literal}' AS Array(UInt64)), toUInt64(2))")
         );
         assert!(prepared.params.is_empty());
     }
 
     #[test]
-    fn scalar_binds_spill_to_literals_once_the_budget_is_spent() {
-        let meta = vec![ClickHouseTypeMetadata::new("UInt64"); 3];
-        let binds: Vec<_> = ["1", "22", "333"]
-            .iter()
-            .map(|v| Some(v.as_bytes().to_vec()))
-            .collect();
-        // Room for exactly one `&param___diesel_clickhouse_pN=V` pair.
-        let one = uri_pair_len("param___diesel_clickhouse_p0", "1");
-        let prepared = parameterize_binds_within("SELECT ?, ?, ?", &meta, &binds, one)
-            .expect("parameterization should succeed");
+    fn non_string_scalars_stay_typed_parameters_when_the_budget_is_spent() {
+        // Decimal strings, dates and ints must keep server-side validation
+        // and their declared type; a bare literal loses both.
+        let meta = [
+            ClickHouseTypeMetadata::with_parameter_type("Decimal64", "Decimal64(2)"),
+            ClickHouseTypeMetadata::new("Date"),
+            ClickHouseTypeMetadata::new("UInt64"),
+        ];
+        let binds = [
+            Some(b"1 + 41".to_vec()),
+            Some(b"2026-01-01".to_vec()),
+            Some(b"7".to_vec()),
+        ];
+        let prepared = parameterize_binds_within("SELECT ?, ?, ?", &meta, &binds, 0).unwrap();
 
-        assert_eq!(
-            prepared.sql,
-            "SELECT {__diesel_clickhouse_p0:UInt64}, 22, 333"
-        );
-        assert_eq!(prepared.params.len(), 1);
+        assert!(!prepared.sql.contains("1 + 41"));
+        assert_eq!(prepared.params.len(), 3);
     }
 
     #[test]
-    fn zero_budget_inlines_every_bind_and_max_budget_inlines_none() {
-        let meta = [ClickHouseTypeMetadata::new("UInt64")];
-        let binds = [Some(b"7".to_vec())];
+    fn spilled_array_travels_as_an_escaped_string_so_it_stays_data() {
+        let prepared = parameterize_binds_within(
+            "SELECT ?",
+            &[ClickHouseTypeMetadata::with_parameter_type(
+                "Array",
+                "Array(String)",
+            )],
+            &[Some(b"['a\\'b']".to_vec())],
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(
+            prepared.sql,
+            "SELECT CAST('[\\'a\\\\\\'b\\']' AS Array(String))"
+        );
+    }
+
+    #[test]
+    fn zero_budget_inlines_strings_and_arrays_and_max_budget_inlines_none() {
+        let meta = [ClickHouseTypeMetadata::new("String")];
+        let binds = [Some(b"x".to_vec())];
 
         let inlined = parameterize_binds_within("SELECT ?", &meta, &binds, 0).unwrap();
-        assert_eq!(inlined.sql, "SELECT 7");
+        assert_eq!(inlined.sql, "SELECT 'x'");
         assert!(inlined.params.is_empty());
 
         let bound = parameterize_binds_within("SELECT ?", &meta, &binds, usize::MAX).unwrap();
-        assert_eq!(bound.sql, "SELECT {__diesel_clickhouse_p0:UInt64}");
+        assert_eq!(bound.sql, "SELECT {__diesel_clickhouse_p0:String}");
         assert_eq!(bound.params.len(), 1);
     }
 

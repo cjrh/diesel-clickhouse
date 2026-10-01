@@ -2582,3 +2582,97 @@ async fn full_dsl_battery_against_live_clickhouse() -> TestResult<()> {
         .await?;
     Ok(())
 }
+
+#[derive(diesel::QueryableByName)]
+struct SpillValue {
+    #[diesel(sql_type = diesel::sql_types::Text)]
+    v: String,
+}
+
+fn spill_conn(fixture: &ClickHouseFixture, budget: usize) -> AsyncClickHouseConnection {
+    AsyncClickHouseConnection::with_client(fixture.client.clone()).with_max_param_uri_bytes(budget)
+}
+
+/// Binds past the URI budget must behave exactly like parameterized binds:
+/// same value, same declared type, and never executable SQL.
+#[tokio::test]
+#[ignore = "requires Docker; starts a real ClickHouse container"]
+async fn spilled_binds_match_parameterized_binds() -> TestResult<()> {
+    use diesel::sql_types::{Date, Double, Text};
+    use diesel_clickhouse::sql_types::{Array, Decimal64, UInt64, UInt128};
+
+    let fixture = start_clickhouse().await?;
+
+    // Run one query at both extremes and require identical results.
+    macro_rules! parity {
+        ($sql:expr, $bind:expr, $ty:ty) => {{
+            let mut out = Vec::new();
+            for budget in [usize::MAX, 0] {
+                let mut conn = spill_conn(&fixture, budget);
+                let rows: Vec<SpillValue> = diesel::sql_query($sql)
+                    .bind::<$ty, _>($bind)
+                    .load(&mut conn)
+                    .await?;
+                out.push(rows[0].v.clone());
+            }
+            assert_eq!(out[0], out[1], "budget MAX vs 0 for {}", $sql);
+            out.remove(0)
+        }};
+    }
+
+    // Wide integers keep every digit (> u64::MAX).
+    let wide = parity!(
+        "SELECT toString(arrayElement(?, 1)) AS v",
+        vec![18_446_744_073_709_551_617_u128; 3],
+        Array<UInt128>
+    );
+    assert_eq!(wide, "18446744073709551617");
+
+    // Date keeps its type through a spill.
+    assert_eq!(
+        parity!("SELECT toString(toYear(?)) AS v", "2026-01-01", Date),
+        "2026"
+    );
+    assert_eq!(parity!("SELECT toString(?) AS v", 1.5_f64, Double), "1.5");
+    assert_eq!(
+        parity!("SELECT toTypeName(?) AS v", 3_u64, UInt64),
+        "UInt64"
+    );
+
+    // Strings with quotes and backslashes survive; arrays of strings too.
+    assert_eq!(
+        parity!("SELECT ? AS v", "it's a \\ test", Text),
+        "it's a \\ test"
+    );
+    assert_eq!(
+        parity!(
+            "SELECT arrayElement(?, 1) AS v",
+            vec!["a'b\\c".to_string()],
+            Array<Text>
+        ),
+        "a'b\\c"
+    );
+
+    // Expression-shaped decimal input is rejected in BOTH modes.
+    for budget in [usize::MAX, 0] {
+        let mut conn = spill_conn(&fixture, budget);
+        let res: Result<Vec<SpillValue>, _> = diesel::sql_query("SELECT toString(?) AS v")
+            .bind::<Decimal64<2>, _>("1 + 41")
+            .load(&mut conn)
+            .await;
+        assert!(
+            res.is_err(),
+            "decimal '1 + 41' must be rejected (budget {budget})"
+        );
+    }
+
+    // A real 30k-id array runs at the default budget (the original bug).
+    let mut conn = spill_conn(&fixture, 32 * 1024);
+    let ids: Vec<u64> = (0..30_000).collect();
+    let rows: Vec<SpillValue> = diesel::sql_query("SELECT toString(length(?)) AS v")
+        .bind::<Array<UInt64>, _>(ids)
+        .load(&mut conn)
+        .await?;
+    assert_eq!(rows[0].v, "30000");
+    Ok(())
+}
