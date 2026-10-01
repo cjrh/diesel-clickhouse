@@ -273,8 +273,10 @@ impl AsyncClickHouseConnection {
     ///
     /// Binds are sent as typed `{name:Type}` server parameters, which travel in
     /// the HTTP request URI. Once a query's parameters would exceed `bytes`, the
-    /// remaining binds are inlined as SQL literals in the request body instead,
-    /// so a large `IN` list or array bind no longer fails with "uri too long".
+    /// remaining binds move to the request body instead, so a large `IN` list or
+    /// array bind no longer fails with "uri too long". Strings become quoted
+    /// literals; numbers, decimals, dates, UUIDs and arrays become
+    /// `CAST('<text>' AS <type>)`, so value and type are unchanged.
     /// Inlined values count against ClickHouse's `max_query_size`, not the URI.
     /// Defaults to [`DEFAULT_MAX_PARAM_URI_BYTES`]; `0` inlines every eligible
     /// bind, and `usize::MAX` restores always-parameterize behavior.
@@ -1278,10 +1280,16 @@ fn push_bind_parameter_or_literal(
         // Out of URI budget: ship this value in the request body instead, but
         // only where that keeps both its exact value and its declared type.
         match (bind_metadata.name, bind) {
-            // Same text the URI parameter would carry, parsed by the same
-            // server-side text reader. A bare `[...]` literal would not do:
-            // it infers a narrower element type and rounds wide integers.
-            ("Array", Some(bytes)) => {
+            // A quoted, escaped literal is already a `String`.
+            ("String", Some(_)) => {
+                push_bind_literal(result, bind_idx, metadata, binds)?;
+                return Ok(());
+            }
+            // Same text the URI parameter would carry, as an escaped string
+            // that the server parses into the declared type. A bare literal
+            // would not do: it infers a narrower type, rounds wide integers,
+            // and (for decimals) would run as SQL. Bad input is a parse error.
+            (name, Some(bytes)) if spills_as_cast_string(name) => {
                 result.push_str("CAST(");
                 push_string_literal(result, bytes)?;
                 result.push_str(" AS ");
@@ -1289,13 +1297,7 @@ fn push_bind_parameter_or_literal(
                 result.push(')');
                 return Ok(());
             }
-            // A quoted, escaped literal is already a `String`.
-            ("String", Some(_)) => {
-                push_bind_literal(result, bind_idx, metadata, binds)?;
-                return Ok(());
-            }
-            // Every other scalar stays a typed parameter: it is small, and a
-            // bare literal would lose its type or skip server validation.
+            // Anything else stays a typed parameter.
             _ => {}
         }
     }
@@ -1308,6 +1310,16 @@ fn push_bind_parameter_or_literal(
     result.push('}');
     params.push((setting_name, parameter_value));
     Ok(())
+}
+
+/// Types whose bind text the server parses back into the declared type.
+fn spills_as_cast_string(metadata_name: &str) -> bool {
+    matches!(
+        metadata_name,
+        "Array" | "Bool" | "Date" | "Date32" | "DateTime" | "DateTime64" | "UUID"
+    ) || ["UInt", "Int", "Float", "Decimal"]
+        .iter()
+        .any(|prefix| metadata_name.starts_with(prefix))
 }
 
 fn server_parameter_type(
@@ -1852,23 +1864,39 @@ mod tests {
     }
 
     #[test]
-    fn non_string_scalars_stay_typed_parameters_when_the_budget_is_spent() {
-        // Decimal strings, dates and ints must keep server-side validation
-        // and their declared type; a bare literal loses both.
+    fn spilled_scalars_become_casts_of_an_escaped_string_never_bare_sql() {
+        // A bare literal loses the declared type, rounds wide integers, and
+        // would run `1 + 41` as SQL. A quoted CAST makes it a parse error.
         let meta = [
             ClickHouseTypeMetadata::with_parameter_type("Decimal64", "Decimal64(2)"),
             ClickHouseTypeMetadata::new("Date"),
-            ClickHouseTypeMetadata::new("UInt64"),
+            ClickHouseTypeMetadata::new("UInt128"),
         ];
         let binds = [
             Some(b"1 + 41".to_vec()),
             Some(b"2026-01-01".to_vec()),
-            Some(b"7".to_vec()),
+            Some(b"18446744073709551617".to_vec()),
         ];
         let prepared = parameterize_binds_within("SELECT ?, ?, ?", &meta, &binds, 0).unwrap();
 
-        assert!(!prepared.sql.contains("1 + 41"));
-        assert_eq!(prepared.params.len(), 3);
+        assert_eq!(
+            prepared.sql,
+            "SELECT CAST('1 + 41' AS Decimal64(2)), CAST('2026-01-01' AS Date), \
+             CAST('18446744073709551617' AS UInt128)"
+        );
+        assert!(prepared.params.is_empty());
+    }
+
+    #[test]
+    fn json_scalars_stay_typed_parameters_when_the_budget_is_spent() {
+        let prepared = parameterize_binds_within(
+            "SELECT ?",
+            &[ClickHouseTypeMetadata::new("JSON")],
+            &[Some(b"{}".to_vec())],
+            0,
+        )
+        .unwrap();
+        assert_eq!(prepared.params.len(), 1);
     }
 
     #[test]

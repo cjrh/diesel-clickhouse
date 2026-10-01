@@ -2639,6 +2639,23 @@ async fn spilled_binds_match_parameterized_binds() -> TestResult<()> {
         "UInt64"
     );
 
+    assert_eq!(
+        parity!("SELECT toString(?) AS v", "12.34", Decimal64<2>),
+        "12.34"
+    );
+    assert_eq!(
+        parity!("SELECT toTypeName(?) AS v", true, diesel::sql_types::Bool),
+        "Bool"
+    );
+    assert_eq!(
+        parity!(
+            "SELECT toTypeName(?) AS v",
+            "2026-01-02 03:04:05",
+            diesel::sql_types::Timestamp
+        ),
+        "DateTime"
+    );
+
     // Strings with quotes and backslashes survive; arrays of strings too.
     assert_eq!(
         parity!("SELECT ? AS v", "it's a \\ test", Text),
@@ -2664,6 +2681,20 @@ async fn spilled_binds_match_parameterized_binds() -> TestResult<()> {
             res.is_err(),
             "decimal '1 + 41' must be rejected (budget {budget})"
         );
+    }
+
+    // Thousands of individual scalar binds (`eq_any`) exceed the URI cap too.
+    // The default budget must spill them, not just a single array bind.
+    {
+        use diesel::dsl::sql;
+        use diesel::sql_types::BigInt;
+        let mut conn = spill_conn(&fixture, 32 * 1024);
+        let hit: bool = diesel::select(
+            sql::<BigInt>("toInt64(2999)").eq_any((0_i64..3000).collect::<Vec<_>>()),
+        )
+        .get_result(&mut conn)
+        .await?;
+        assert!(hit);
     }
 
     // A real 30k-id array runs at the default budget (the original bug).
