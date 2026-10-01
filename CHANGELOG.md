@@ -10,6 +10,9 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Fixed
+- Large binds no longer fail client-side with `invalid params: uri too long`. Server-side `param_*` values travel in the request URI, which the `http` crate caps at 64 KB. Each query now has a URI budget (default 32 KiB, `DEFAULT_MAX_PARAM_URI_BYTES`); binds past it are rendered as SQL literals in the request body instead. Array binds are wrapped in `CAST(... AS Array(T))` so the element type survives. Tune with `AsyncClickHouseConnection::with_max_param_uri_bytes` (`usize::MAX` restores the old behaviour). Named parameters are never inlined. Inlined values count against ClickHouse's `max_query_size` instead.
+
 ## [0.10.0] — 2026-06-06
 
 ## [0.10.0] — 2026-06-05

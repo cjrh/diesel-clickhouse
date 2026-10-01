@@ -74,7 +74,18 @@ pub struct AsyncClickHouseConnection {
     client: clickhouse::Client,
     transaction_state: TransactionManagerStatus,
     instrumentation: Option<Box<dyn Instrumentation>>,
+    max_param_uri_bytes: usize,
 }
+
+/// Default budget for the URL-encoded size of server-side query parameters.
+///
+/// The `clickhouse` client sends `param_*` values in the request URI, and the
+/// `http` crate rejects URIs over 65 535 bytes *client-side* ("uri too long").
+/// Binds that would push the encoded parameters past this budget are rendered as
+/// SQL literals in the request body instead, which is governed by ClickHouse's
+/// much larger `max_query_size`. The budget leaves headroom under the hard cap
+/// for the database, settings and roles that share the same URI.
+pub const DEFAULT_MAX_PARAM_URI_BYTES: usize = 32 * 1024;
 
 /// Explicit configuration for establishing an [`AsyncClickHouseConnection`].
 ///
@@ -254,7 +265,23 @@ impl AsyncClickHouseConnection {
             client,
             transaction_state: TransactionManagerStatus::default(),
             instrumentation: get_default_instrumentation(),
+            max_param_uri_bytes: DEFAULT_MAX_PARAM_URI_BYTES,
         }
+    }
+
+    /// Set the budget for URL-encoded server-side parameters per query.
+    ///
+    /// Binds are sent as typed `{name:Type}` server parameters, which travel in
+    /// the HTTP request URI. Once a query's parameters would exceed `bytes`, the
+    /// remaining binds are inlined as SQL literals in the request body instead,
+    /// so a large `IN` list or array bind no longer fails with "uri too long".
+    /// Inlined values count against ClickHouse's `max_query_size`, not the URI.
+    /// Defaults to [`DEFAULT_MAX_PARAM_URI_BYTES`]; `0` inlines every eligible
+    /// bind, and `usize::MAX` restores always-parameterize behavior.
+    /// Named parameters ([`named_param`](crate::named_param)) are never inlined.
+    pub fn with_max_param_uri_bytes(mut self, bytes: usize) -> Self {
+        self.max_param_uri_bytes = bytes;
+        self
     }
 
     /// Access the underlying ClickHouse client for ClickHouse-specific setup.
@@ -379,7 +406,12 @@ impl AsyncClickHouseConnection {
         let mut metadata_lookup = ();
         let mut bind_collector = RawBytesBindCollector::<ClickHouse>::new();
         source.collect_binds(&mut bind_collector, &mut metadata_lookup, &backend)?;
-        parameterize_binds(&sql, &bind_collector.metadata, &bind_collector.binds)
+        parameterize_binds_within(
+            &sql,
+            &bind_collector.metadata,
+            &bind_collector.binds,
+            self.max_param_uri_bytes,
+        )
     }
 
     async fn execute_sql(&mut self, sql: &str) -> QueryResult<()> {
@@ -780,16 +812,35 @@ impl PreparedQuery {
     }
 }
 
+#[cfg(test)]
 fn parameterize_binds(
     sql: &str,
     metadata: &[ClickHouseTypeMetadata],
     binds: &[Option<Vec<u8>>],
+) -> QueryResult<PreparedQuery> {
+    parameterize_binds_within(sql, metadata, binds, DEFAULT_MAX_PARAM_URI_BYTES)
+}
+
+fn parameterize_binds_within(
+    sql: &str,
+    metadata: &[ClickHouseTypeMetadata],
+    binds: &[Option<Vec<u8>>],
+    max_param_uri_bytes: usize,
 ) -> QueryResult<PreparedQuery> {
     reject_reserved_sql_parameters(sql)?;
 
     let mut result = String::with_capacity(sql.len());
     let mut params = Vec::new();
     let positional_binds = collect_named_parameters(&mut params, metadata, binds)?;
+    // Named parameters cannot be inlined, so they are charged first.
+    let mut budget = ParamUriBudget {
+        remaining: max_param_uri_bytes.saturating_sub(
+            params
+                .iter()
+                .map(|(n, v)| uri_pair_len(n, v))
+                .sum::<usize>(),
+        ),
+    };
     let mut chars = sql.char_indices().peekable();
     let mut bind_idx = 0;
     let mut state = SqlScanState::Code;
@@ -814,6 +865,7 @@ fn parameterize_binds(
                         push_bind_parameter_or_literal(
                             &mut result,
                             &mut params,
+                            &mut budget,
                             actual_bind_idx,
                             metadata,
                             binds,
@@ -1169,9 +1221,32 @@ fn push_bind_literal(
     Ok(())
 }
 
+/// What is left of the URI budget for server-side parameters in one query.
+struct ParamUriBudget {
+    remaining: usize,
+}
+
+/// Length of `&name=value` once form-urlencoded into the request URI.
+fn uri_pair_len(name: &str, value: &str) -> usize {
+    fn encoded(s: &str) -> usize {
+        s.bytes()
+            .map(|b| {
+                if b.is_ascii_alphanumeric() || matches!(b, b'*' | b'-' | b'.' | b'_' | b' ') {
+                    1
+                } else {
+                    3
+                }
+            })
+            .sum()
+    }
+    // `&` + name + `=` + value
+    2 + encoded(name) + encoded(value)
+}
+
 fn push_bind_parameter_or_literal(
     result: &mut String,
     params: &mut Vec<(String, String)>,
+    budget: &mut ParamUriBudget,
     bind_idx: usize,
     metadata: &[ClickHouseTypeMetadata],
     binds: &[Option<Vec<u8>>],
@@ -1197,12 +1272,31 @@ fn push_bind_parameter_or_literal(
     let parameter_value = server_parameter_value(bind_metadata.name, bind)?;
     let parameter_name = format!("{INTERNAL_PARAMETER_PREFIX}p{bind_idx}");
 
+    let setting_name = format!("param_{parameter_name}");
+    let cost = uri_pair_len(&setting_name, &parameter_value);
+    if cost > budget.remaining {
+        // Out of URI budget: ship this value in the request body instead. An
+        // array literal has no element type of its own (`[1,2]` is
+        // `Array(UInt8)`), so cast it back to the declared parameter type.
+        if bind_metadata.name == "Array" {
+            result.push_str("CAST(");
+            push_bind_literal(result, bind_idx, metadata, binds)?;
+            result.push_str(" AS ");
+            result.push_str(&parameter_type);
+            result.push(')');
+        } else {
+            push_bind_literal(result, bind_idx, metadata, binds)?;
+        }
+        return Ok(());
+    }
+    budget.remaining -= cost;
+
     result.push('{');
     result.push_str(&parameter_name);
     result.push(':');
     result.push_str(&parameter_type);
     result.push('}');
-    params.push((format!("param_{parameter_name}"), parameter_value));
+    params.push((setting_name, parameter_value));
     Ok(())
 }
 
@@ -1724,6 +1818,73 @@ mod tests {
                 "[1,2,3]".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn oversized_array_bind_is_inlined_with_a_cast_instead_of_a_uri_parameter() {
+        let ids: Vec<String> = (0..20_000).map(|n| n.to_string()).collect();
+        let literal = format!("[{}]", ids.join(","));
+        let prepared = parameterize_binds(
+            "SELECT has(?, toUInt64(2))",
+            &[ClickHouseTypeMetadata::with_parameter_type(
+                "Array",
+                "Array(UInt64)",
+            )],
+            &[Some(literal.clone().into_bytes())],
+        )
+        .expect("parameterization should succeed");
+
+        assert_eq!(
+            prepared.sql,
+            format!("SELECT has(CAST({literal} AS Array(UInt64)), toUInt64(2))")
+        );
+        assert!(prepared.params.is_empty());
+    }
+
+    #[test]
+    fn scalar_binds_spill_to_literals_once_the_budget_is_spent() {
+        let meta = vec![ClickHouseTypeMetadata::new("UInt64"); 3];
+        let binds: Vec<_> = ["1", "22", "333"]
+            .iter()
+            .map(|v| Some(v.as_bytes().to_vec()))
+            .collect();
+        // Room for exactly one `&param___diesel_clickhouse_pN=V` pair.
+        let one = uri_pair_len("param___diesel_clickhouse_p0", "1");
+        let prepared = parameterize_binds_within("SELECT ?, ?, ?", &meta, &binds, one)
+            .expect("parameterization should succeed");
+
+        assert_eq!(
+            prepared.sql,
+            "SELECT {__diesel_clickhouse_p0:UInt64}, 22, 333"
+        );
+        assert_eq!(prepared.params.len(), 1);
+    }
+
+    #[test]
+    fn zero_budget_inlines_every_bind_and_max_budget_inlines_none() {
+        let meta = [ClickHouseTypeMetadata::new("UInt64")];
+        let binds = [Some(b"7".to_vec())];
+
+        let inlined = parameterize_binds_within("SELECT ?", &meta, &binds, 0).unwrap();
+        assert_eq!(inlined.sql, "SELECT 7");
+        assert!(inlined.params.is_empty());
+
+        let bound = parameterize_binds_within("SELECT ?", &meta, &binds, usize::MAX).unwrap();
+        assert_eq!(bound.sql, "SELECT {__diesel_clickhouse_p0:UInt64}");
+        assert_eq!(bound.params.len(), 1);
+    }
+
+    #[test]
+    fn spilled_string_bind_is_quoted_and_escaped() {
+        let prepared = parameterize_binds_within(
+            "SELECT ?",
+            &[ClickHouseTypeMetadata::new("String")],
+            &[Some(b"it's".to_vec())],
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(prepared.sql, "SELECT 'it\\'s'");
     }
 
     #[test]
