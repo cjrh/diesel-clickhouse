@@ -10,6 +10,8 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+## [0.11.1] — 2026-10-03
+
 ### Fixed
 - `in_list` now renders `(column IN ?)`, not `has(?, column)`. Before ClickHouse 26.6, `has` with a constant array compares each row against the whole array (O(rows × ids)); `IN` builds a hash set once. Pruning, binds, URI-budget spill and results are unchanged. With 3,000 UUIDs over 1.5M rows on 26.3: 1.5 s before, 0.09 s after.
 
@@ -143,7 +145,8 @@ Initial release.
 - ClickHouse SQL type markers, DDL builders, query clause extensions, functions, aggregates, vector helpers, joins, windows, grouping extensions, and live ClickHouse coverage.
 - NYC taxi tutorial and executable tutorial example.
 
-[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.11.0...HEAD
+[Unreleased]: https://github.com/cjrh/diesel-clickhouse/compare/v0.11.1...HEAD
+[0.11.1]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.11.1
 [0.11.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.11.0
 [0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
 [0.10.0]: https://github.com/cjrh/diesel-clickhouse/releases/tag/v0.10.0
