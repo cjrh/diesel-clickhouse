@@ -10,6 +10,9 @@ The crate's major version tracks Diesel's third-party backend surface: a Diesel
 
 ## [Unreleased]
 
+### Fixed
+- `in_list` now renders `(column IN ?)`, not `has(?, column)`. Before ClickHouse 26.6, `has` with a constant array compares each row against the whole array (O(rows × ids)); `IN` builds a hash set once. Pruning, binds, URI-budget spill and results are unchanged. With 3,000 UUIDs over 1.5M rows on 26.3: 1.5 s before, 0.09 s after.
+
 ## [0.11.0] — 2026-10-01
 
 ### Added

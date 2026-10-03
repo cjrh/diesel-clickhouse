@@ -275,7 +275,7 @@ async fn main() -> Result<()> {
          types (`i32`, `i64`, `f64`, `bool`, `String`) and fails to compile for \
          ClickHouse-only ones: `eq_any(vec_of_u64)` on a `UInt64` column reports \
          `u64: AsExpression<UInt64>` is not satisfied. `in_list(column, values)` \
-         sends the whole list as one `Array` bind and renders `has(?, column)`, so \
+         sends the whole list as one `Array` bind and renders `(column IN ?)`, so \
          it works for those types, and a very long list stays one parameter. Past \
          the connection's URI budget the array moves to the request body, so it \
          does not hit `uri too long`. An empty list matches nothing. Nullable \

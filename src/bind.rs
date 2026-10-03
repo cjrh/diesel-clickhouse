@@ -41,7 +41,7 @@
 //! reads `u64: AsExpression<UInt64>` is not satisfied.
 //!
 //! Use [`in_list`] instead. It sends the whole list as one `Array` bind and
-//! renders `has(?, column)`, so it works for every element type that has an
+//! renders `(column IN ?)`, so it works for every element type that has an
 //! array `ToSql`, and a huge list is one parameter, not thousands:
 //!
 //! ```ignore
@@ -149,7 +149,7 @@ impl<ST, T, GB> ValidGrouping<GB> for BoundValue<ST, T> {
     type IsAggregate = is_aggregate::Never;
 }
 
-/// `column IN (values...)` as a single array bind: renders `has(?, column)`.
+/// `column IN (values...)` as a single array bind: renders `(column IN ?)`.
 ///
 /// Construct one with [`in_list`].
 #[derive(Debug, Clone)]
@@ -160,8 +160,14 @@ pub struct InList<Col, T> {
 
 /// Filter `column` to any of `values`, sent as one `Array` bind.
 ///
-/// `column IN (values)`, rendered `has(?, column)`. An empty list matches
+/// `column IN (values)`, rendered `(column IN ?)`. An empty list matches
 /// nothing.
+///
+/// It renders `IN`, not `has(?, column)`. Both prune granules the same way, but
+/// before ClickHouse 26.6 (which adds `optimize_rewrite_has_to_in`) `has` with a
+/// constant array compares each row against the whole array, O(rows × ids).
+/// `IN` builds a hash set once. With 3,000 UUIDs over 1.5M rows on 26.3 that is
+/// 1.5 s against 0.09 s.
 ///
 /// ```ignore
 /// use diesel_clickhouse::in_list;
@@ -222,10 +228,12 @@ where
     Vec<T>: ToSql<Array<Col::SqlType>, ClickHouse>,
 {
     fn walk_ast<'b>(&'b self, mut pass: AstPass<'_, 'b, ClickHouse>) -> QueryResult<()> {
-        pass.push_sql("has(");
-        pass.push_bind_param::<Array<Col::SqlType>, _>(&self.values)?;
-        pass.push_sql(", ");
+        // Parenthesized so it stays one operand inside a larger expression,
+        // as the `has(…)` call it replaced was.
+        pass.push_sql("(");
         self.column.walk_ast(pass.reborrow())?;
+        pass.push_sql(" IN ");
+        pass.push_bind_param::<Array<Col::SqlType>, _>(&self.values)?;
         pass.push_sql(")");
         Ok(())
     }

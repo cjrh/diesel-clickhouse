@@ -1737,6 +1737,9 @@ fn renders_bind_against_clickhouse_unsigned_columns() {
 
 // `in_list` is `IN (...)` for column types where `eq_any` does not compile
 // (`Vec<u64>` against a `UInt64` column). The whole list is one array bind.
+// It must render `IN`, not `has(?, col)`: before ClickHouse 26.6 `has` with a
+// constant array scans the array once per row (O(rows x ids)), where `IN`
+// builds a hash set once.
 #[test]
 fn renders_in_list_as_one_array_bind() {
     use diesel_clickhouse::in_list;
@@ -1747,7 +1750,7 @@ fn renders_in_list_as_one_array_bind() {
 
     assert_eq!(
         to_sql(&query).unwrap(),
-        "SELECT `counters`.`id` FROM `counters` WHERE has(?, `counters`.`id`)"
+        "SELECT `counters`.`id` FROM `counters` WHERE (`counters`.`id` IN ?)"
     );
 }
 
